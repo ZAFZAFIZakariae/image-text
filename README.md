@@ -11,7 +11,7 @@ This repository contains scripts for text-to-image generation and image captioni
    pip install -r requirements.txt
    ```
 
-   The requirements closely follow the setup recommended in the Diffusers documentation, so make sure you have a recent version of `pip` and, if you plan to run Stable Diffusion, the appropriate GPU drivers and CUDA toolkit installed.
+   The requirements closely follow the setup recommended in the Diffusers documentation. Make sure you have a recent version of `pip`. If you are targeting GPU execution (e.g., CUDA 11.8 on Colab), install PyTorch from the official index first using the command shown in the Colab section below so that `pip install -r requirements.txt` reuses that compatible wheel.
 
 ## Running Inference
 
@@ -57,8 +57,15 @@ If you prefer to experiment in Google Colab:
 2. In a cell, install the dependencies:
 
    ```python
+   !pip install --upgrade pip
+   !pip install torch --index-url https://download.pytorch.org/whl/cu118
    !pip install -r requirements.txt
    ```
+
+   The separate `torch` installation ensures that Colab (or any CUDA-enabled runtime) receives a current GPU build before the
+   remaining packages are installed. The requirement file now accepts any modern PyTorch release (2.2 or newer), so the command
+   above will stay compatible as PyTorch publishes new wheels.
+
 3. Upload or clone this repository into the notebook environment and run the same commands described above (e.g., `!python run_text2image.py --prompt "A futuristic cityscape at sunset"`).
 
 GPU support dramatically speeds up Stable Diffusion and other diffusion-based models, mirroring the Hugging Face guidance of moving models to CUDA when available.
