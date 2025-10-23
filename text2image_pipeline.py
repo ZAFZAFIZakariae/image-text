@@ -1,38 +1,103 @@
-"""Text-to-image generation module using Stable Diffusion v1.5.
+"""Text-to-image generation module supporting multiple diffusion backends.
 
-This module exposes a ``generate_image`` function that leverages the
-``diffusers`` library to run the Stable Diffusion v1.5 pipeline.  The
-pipeline is moved to a CUDA device when available so image synthesis can
-take advantage of GPU acceleration. The underlying model can be overridden
-via the ``TEXT2IMAGE_MODEL_ID`` environment variable when a different
-checkpoint is desired.
+This module exposes a :func:`generate_image` helper that wraps models from the
+`diffusers <https://github.com/huggingface/diffusers>`_ library.  The module
+now ships with built-in configurations for Stable Diffusion XL 1.0 and
+Animagine XL 3.0 while still allowing callers to supply any other Hugging Face
+model identifier.  Pipelines are cached per model so the heavy weights are only
+loaded once per process, and the built-in safety checker is disabled to avoid
+automatic censoring.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple, Type
 
 from inspect import signature
 
 import torch
-from diffusers import StableDiffusionPipeline
+from diffusers import (
+    DiffusionPipeline,
+    StableDiffusionPipeline,
+    StableDiffusionXLPipeline,
+)
 from PIL import Image
 
 
-DEFAULT_MODEL_ID = "runwayml/stable-diffusion-v1-5"
+@dataclass(frozen=True)
+class ModelConfig:
+    """Configuration describing how to construct a diffusion pipeline."""
+
+    model_id: str
+    pipeline_cls: Type[DiffusionPipeline]
+    variant: Optional[str] = None
 
 
-def _load_pipeline() -> StableDiffusionPipeline:
-    """Load the Stable Diffusion v1.5 pipeline.
+DEFAULT_MODEL_NAME = "stable-diffusion-xl-1.0"
 
-    Returns
-    -------
-    StableDiffusionPipeline
-        An instance of the text-to-image diffusion pipeline configured for
-        the best available compute device.
-    """
+_MODEL_REGISTRY: Dict[str, ModelConfig] = {
+    "stable-diffusion-v1-5": ModelConfig(
+        model_id="runwayml/stable-diffusion-v1-5",
+        pipeline_cls=StableDiffusionPipeline,
+    ),
+    "stable-diffusion-xl-1.0": ModelConfig(
+        model_id="stabilityai/stable-diffusion-xl-base-1.0",
+        pipeline_cls=StableDiffusionXLPipeline,
+        variant="fp16",
+    ),
+    "animagine-xl-3.0": ModelConfig(
+        model_id="cagliostrolab/animagine-xl-3.0",
+        pipeline_cls=StableDiffusionXLPipeline,
+        variant="fp16",
+    ),
+}
+
+AVAILABLE_MODELS = tuple(sorted(_MODEL_REGISTRY))
+
+_PIPELINE_CACHE: Dict[str, DiffusionPipeline] = {}
+
+
+def _normalise_model_name(model_name: str) -> str:
+    """Normalise a model alias for dictionary lookup."""
+
+    # Hugging Face model identifiers include `/`. Treat those as canonical IDs
+    # and return them unchanged so custom checkpoints are supported.
+    if "/" in model_name:
+        return model_name
+
+    normalised = model_name.strip().lower()
+    # Replace spaces with dashes and drop parentheses so names like
+    # "Stable Diffusion XL (1.0)" resolve to the registered alias.
+    normalised = normalised.replace(" ", "-")
+    normalised = re.sub(r"[()]+", "", normalised)
+    return normalised
+
+
+def _resolve_model(model_name: Optional[str]) -> Tuple[str, ModelConfig]:
+    """Determine which model configuration should be used."""
+
+    requested = model_name or os.getenv("TEXT2IMAGE_MODEL_ID", DEFAULT_MODEL_NAME)
+    normalised = _normalise_model_name(requested)
+
+    if normalised in _MODEL_REGISTRY:
+        return normalised, _MODEL_REGISTRY[normalised]
+
+    # Fall back to treating the provided value as a direct Hugging Face model ID.
+    # Use the Stable Diffusion v1.5 pipeline class as a sensible default.
+    return requested, ModelConfig(model_id=requested, pipeline_cls=StableDiffusionPipeline)
+
+
+def _load_pipeline(model_name: Optional[str] = None) -> DiffusionPipeline:
+    """Load (or retrieve from cache) a diffusion pipeline instance."""
+
+    cache_key, config = _resolve_model(model_name)
+
+    if cache_key in _PIPELINE_CACHE:
+        return _PIPELINE_CACHE[cache_key]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -42,18 +107,21 @@ def _load_pipeline() -> StableDiffusionPipeline:
         torch.float16 if device == "cuda" else torch.float32
     )
 
-    model_id = os.getenv("TEXT2IMAGE_MODEL_ID", DEFAULT_MODEL_ID)
+    model_id = config.model_id
 
     load_kwargs = {}
     if torch_dtype is not None:
-        pretrained_signature = signature(StableDiffusionPipeline.from_pretrained)
+        pretrained_signature = signature(config.pipeline_cls.from_pretrained)
         if "dtype" in pretrained_signature.parameters:
             load_kwargs["dtype"] = torch_dtype
         else:
             load_kwargs["torch_dtype"] = torch_dtype
 
+    if config.variant is not None and torch_dtype == torch.float16:
+        load_kwargs.setdefault("variant", config.variant)
+
     try:
-        pipeline = StableDiffusionPipeline.from_pretrained(model_id, **load_kwargs)
+        pipeline = config.pipeline_cls.from_pretrained(model_id, **load_kwargs)
     except OSError as exc:  # pragma: no cover - passthrough for clearer error message
         raise RuntimeError(
             "Failed to load Stable Diffusion pipeline. "
@@ -65,13 +133,14 @@ def _load_pipeline() -> StableDiffusionPipeline:
     # Move the pipeline to the appropriate device (GPU when available).
     pipeline = pipeline.to(device)
 
+    # Disable the default NSFW safety checker so the pipeline returns images
+    # unfiltered. Some pipelines expose ``None`` when no checker exists, hence
+    # the attribute guard.
+    if hasattr(pipeline, "safety_checker"):
+        pipeline.safety_checker = _disable_safety_checker
+
+    _PIPELINE_CACHE[cache_key] = pipeline
     return pipeline
-
-
-# Lazily load the pipeline so it is created once when the module is imported.
-_PIPELINE: StableDiffusionPipeline = _load_pipeline()
-# Disable the default NSFW safety checker so the pipeline returns images unfiltered.
-# The callable mirrors the expected signature and always reports that the content is safe.
 
 
 def _disable_safety_checker(images, **kwargs):
@@ -88,16 +157,17 @@ def _disable_safety_checker(images, **kwargs):
     return images, [False] * len(images)
 
 
-_PIPELINE.safety_checker = _disable_safety_checker
-
-
-def generate_image(prompt: str) -> Image.Image:
+def generate_image(prompt: str, model: Optional[str] = None) -> Image.Image:
     """Generate an image from a text prompt.
 
     Parameters
     ----------
     prompt:
         The text description to feed into Stable Diffusion.
+    model:
+        Optional alias or Hugging Face model identifier designating which
+        diffusion pipeline to run. When omitted the default configured model
+        (Stable Diffusion XL 1.0) is used.
 
     Returns
     -------
@@ -106,7 +176,8 @@ def generate_image(prompt: str) -> Image.Image:
     """
 
     # The pipeline returns a ``PipelineOutput`` containing a list of PIL images.
-    output = _PIPELINE(prompt)
+    pipeline = _load_pipeline(model)
+    output = pipeline(prompt)
     return output.images[0]
 
 

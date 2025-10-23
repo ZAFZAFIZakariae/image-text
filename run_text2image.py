@@ -12,7 +12,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from text2image_pipeline import generate_image
+from text2image_pipeline import (
+    AVAILABLE_MODELS,
+    DEFAULT_MODEL_NAME,
+    generate_image,
+)
 
 
 DEFAULT_PROMPT = "A robot painting a portrait"
@@ -37,6 +41,15 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT,
         help="Filename for saving the generated image.",
     )
+    parser.add_argument(
+        "--model",
+        "-m",
+        default=None,
+        help=(
+            "Model alias or Hugging Face model ID to use for image generation. "
+            f"Known aliases: {', '.join(AVAILABLE_MODELS)}"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -48,7 +61,11 @@ def main() -> None:
     output_path = Path(args.output).expanduser()
 
     print(f"Prompt: {prompt}")
-    image = generate_image(prompt)
+    model_choice = args.model
+    selected_model = model_choice or DEFAULT_MODEL_NAME
+    print(f"Using model: {selected_model}")
+
+    image = generate_image(prompt, model=model_choice)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path)

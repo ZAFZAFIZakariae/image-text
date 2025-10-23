@@ -22,10 +22,11 @@ Use the provided script to generate images from prompts:
 ```bash
 python run_text2image.py \
     --prompt "A futuristic cityscape at sunset" \
-    --output_dir outputs/text2image
+    --output outputs/text2image.png \
+    --model "Animagine XL 3.0"
 ```
 
-By default, Stable Diffusion models are moved to CUDA when available (as recommended by Hugging Face). A GPU is strongly recommended for reasonable generation speed and quality.
+The ``--model`` flag accepts aliases for the bundled configurations (``stable-diffusion-xl-1.0`` and ``animagine-xl-3.0``) as well as any Hugging Face model identifier. Leaving the option blank uses Stable Diffusion XL 1.0. Regardless of the model, pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
 
 ### Image Captioning
 
