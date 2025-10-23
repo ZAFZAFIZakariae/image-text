@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from inspect import signature
+
 import torch
 from diffusers import StableDiffusionPipeline
 from PIL import Image
@@ -42,10 +44,16 @@ def _load_pipeline() -> StableDiffusionPipeline:
 
     model_id = os.getenv("TEXT2IMAGE_MODEL_ID", DEFAULT_MODEL_ID)
 
+    load_kwargs = {}
+    if torch_dtype is not None:
+        pretrained_signature = signature(StableDiffusionPipeline.from_pretrained)
+        if "dtype" in pretrained_signature.parameters:
+            load_kwargs["dtype"] = torch_dtype
+        else:
+            load_kwargs["torch_dtype"] = torch_dtype
+
     try:
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            model_id, torch_dtype=torch_dtype
-        )
+        pipeline = StableDiffusionPipeline.from_pretrained(model_id, **load_kwargs)
     except OSError as exc:  # pragma: no cover - passthrough for clearer error message
         raise RuntimeError(
             "Failed to load Stable Diffusion pipeline. "
@@ -64,7 +72,23 @@ def _load_pipeline() -> StableDiffusionPipeline:
 _PIPELINE: StableDiffusionPipeline = _load_pipeline()
 # Disable the default NSFW safety checker so the pipeline returns images unfiltered.
 # The callable mirrors the expected signature and always reports that the content is safe.
-_PIPELINE.safety_checker = lambda images, **kwargs: (images, False)
+
+
+def _disable_safety_checker(images, **kwargs):
+    """Return the images unchanged and flag them all as safe.
+
+    The diffusers pipelines expect the safety checker to return a tuple of
+    (images, has_nsfw_concept) where ``has_nsfw_concept`` is an iterable with
+    one boolean per generated image. Some versions of diffusers later iterate
+    over this value, so returning a bare ``False`` would raise a ``TypeError``.
+    """
+
+    # ``images`` is typically a list of PIL images; mirror that structure when
+    # reporting that every generated image passed the (disabled) safety check.
+    return images, [False] * len(images)
+
+
+_PIPELINE.safety_checker = _disable_safety_checker
 
 
 def generate_image(prompt: str) -> Image.Image:
