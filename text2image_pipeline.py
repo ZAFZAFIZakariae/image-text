@@ -62,6 +62,9 @@ def _load_pipeline() -> StableDiffusionPipeline:
 
 # Lazily load the pipeline so it is created once when the module is imported.
 _PIPELINE: StableDiffusionPipeline = _load_pipeline()
+# Disable the default NSFW safety checker so the pipeline returns images unfiltered.
+# The callable mirrors the expected signature and always reports that the content is safe.
+_PIPELINE.safety_checker = lambda images, **kwargs: (images, False)
 
 
 def generate_image(prompt: str) -> Image.Image:
