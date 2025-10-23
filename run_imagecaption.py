@@ -28,20 +28,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "image",
         nargs="?",
-        default=DEFAULT_IMAGE,
+        default=None,
         help=(
             "Path or URL to the image to caption. "
             "Defaults to a demo image hosted by Hugging Face."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--image_path",
+        "-i",
+        dest="image_path",
+        help=(
+            "Optional path or URL to the image to caption. "
+            "Equivalent to providing the positional IMAGE argument."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.image_path is not None and args.image is not None:
+        parser.error(
+            "Cannot provide both the positional IMAGE argument and --image_path. "
+            "Please supply only one."
+        )
+
+    return args
 
 
 def main() -> None:
     """Entry point for the command-line image captioning script."""
 
     args = parse_args()
-    image_reference: str = args.image
+    if args.image_path is not None:
+        image_reference: str = args.image_path
+    elif args.image is not None:
+        image_reference = args.image
+    else:
+        image_reference = DEFAULT_IMAGE
 
     print(f"Captioning image: {image_reference}")
     caption = caption_image(image_reference)
