@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+import logging
 import re
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Type
@@ -26,6 +27,9 @@ from diffusers import (
     StableDiffusionXLPipeline,
 )
 from PIL import Image
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,26 @@ def _load_pipeline(model_name: Optional[str] = None) -> DiffusionPipeline:
 
     try:
         pipeline = config.pipeline_cls.from_pretrained(model_id, **load_kwargs)
+    except ValueError as exc:
+        should_retry_without_variant = (
+            "variant" in load_kwargs
+            and config.variant is not None
+            and "variant=" in str(exc)
+        )
+
+        if should_retry_without_variant:
+            logger.warning(
+                "Model %s does not provide the '%s' variant; falling back to default "
+                "weights. This may increase memory usage and slightly reduce "
+                "performance compared to native %s weights.",
+                model_id,
+                config.variant,
+                config.variant,
+            )
+            load_kwargs.pop("variant", None)
+            pipeline = config.pipeline_cls.from_pretrained(model_id, **load_kwargs)
+        else:
+            raise
     except OSError as exc:  # pragma: no cover - passthrough for clearer error message
         raise RuntimeError(
             "Failed to load Stable Diffusion pipeline. "
@@ -188,3 +212,4 @@ if __name__ == "__main__":
     output_path = Path("output.png")
     image.save(output_path)
     print(f"Generated image saved to {output_path.resolve()}")
+
