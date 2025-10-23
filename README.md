@@ -11,7 +11,9 @@ This repository contains scripts for text-to-image generation and image captioni
    pip install -r requirements.txt
    ```
 
-   The requirements closely follow the setup recommended in the Diffusers documentation, so make sure you have a recent version of `pip` and, if you plan to run Stable Diffusion, the appropriate GPU drivers and CUDA toolkit installed.
+   The requirement pins were relaxed so that modern Python runtimes (including Colab's Python 3.12 images) can resolve wheels that Hugging Face and PyTorch publish over time. Make sure you have a recent version of `pip`. If you are targeting GPU execution (e.g., CUDA 11.8 on Colab), install PyTorch from the official index first using the command shown in the Colab section below so that `pip install -r requirements.txt` reuses that compatible wheel.
+
+   Only the libraries used by the checked-in scripts remain in `requirements.txt`; optional extras such as SciPy or Accelerate were dropped to avoid version conflicts on newer Python releases.
 
 ## Running Inference
 
@@ -22,7 +24,7 @@ Use the provided script to generate images from prompts:
 ```bash
 python run_text2image.py \
     --prompt "A futuristic cityscape at sunset" \
-    --output_dir outputs/text2image
+    --output outputs/text2image.png
 ```
 
 By default, Stable Diffusion models are moved to CUDA when available (as recommended by Hugging Face). A GPU is strongly recommended for reasonable generation speed and quality.
@@ -32,8 +34,7 @@ By default, Stable Diffusion models are moved to CUDA when available (as recomme
 Generate captions for images with:
 
 ```bash
-python run_imagecaption.py \
-    --image_path path/to/your/image.jpg
+python run_imagecaption.py path/to/your/image.jpg
 ```
 
 Captions are saved alongside the input image unless an output path is specified.
@@ -57,8 +58,15 @@ If you prefer to experiment in Google Colab:
 2. In a cell, install the dependencies:
 
    ```python
+   !pip install --upgrade pip
+   !pip install torch --index-url https://download.pytorch.org/whl/cu118
    !pip install -r requirements.txt
    ```
+
+   Installing `torch` first ensures that Colab (or any CUDA-enabled runtime) receives a GPU build matched to the available CUDA
+   toolkit. Because `requirements.txt` now specifies minimum versions instead of exact pins, the follow-up install step reuses
+   that wheel and resolves compatible versions of the Hugging Face libraries even as their upstream projects cut new releases.
+
 3. Upload or clone this repository into the notebook environment and run the same commands described above (e.g., `!python run_text2image.py --prompt "A futuristic cityscape at sunset"`).
 
 GPU support dramatically speeds up Stable Diffusion and other diffusion-based models, mirroring the Hugging Face guidance of moving models to CUDA when available.
