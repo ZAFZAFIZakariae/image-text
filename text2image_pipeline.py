@@ -3,17 +3,23 @@
 This module exposes a ``generate_image`` function that leverages the
 ``diffusers`` library to run the Stable Diffusion v1.5 pipeline.  The
 pipeline is moved to a CUDA device when available so image synthesis can
-take advantage of GPU acceleration.
+take advantage of GPU acceleration. The underlying model can be overridden
+via the ``TEXT2IMAGE_MODEL_ID`` environment variable when a different
+checkpoint is desired.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
 import torch
 from diffusers import StableDiffusionPipeline
 from PIL import Image
+
+
+DEFAULT_MODEL_ID = "runwayml/stable-diffusion-v1-5"
 
 
 def _load_pipeline() -> StableDiffusionPipeline:
@@ -34,9 +40,19 @@ def _load_pipeline() -> StableDiffusionPipeline:
         torch.float16 if device == "cuda" else torch.float32
     )
 
-    pipeline = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-5", torch_dtype=torch_dtype
-    )
+    model_id = os.getenv("TEXT2IMAGE_MODEL_ID", DEFAULT_MODEL_ID)
+
+    try:
+        pipeline = StableDiffusionPipeline.from_pretrained(
+            model_id, torch_dtype=torch_dtype
+        )
+    except OSError as exc:  # pragma: no cover - passthrough for clearer error message
+        raise RuntimeError(
+            "Failed to load Stable Diffusion pipeline. "
+            "Check that the model ID is correct and that you have the "
+            "necessary permissions. You can override the model via the "
+            "TEXT2IMAGE_MODEL_ID environment variable."
+        ) from exc
 
     # Move the pipeline to the appropriate device (GPU when available).
     pipeline = pipeline.to(device)
