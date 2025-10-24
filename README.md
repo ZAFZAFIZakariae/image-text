@@ -86,6 +86,27 @@ If you prefer to experiment in Google Colab:
 
 3. Upload or clone this repository into the notebook environment and run the same commands described above (e.g., `!python run_text2image.py --prompt "A futuristic cityscape at sunset"`).
 
+### Removing numbered duplicates on Colab
+
+To clean a dataset stored on Google Drive:
+
+1. Mount your Drive inside the notebook:
+
+   ```python
+   from google.colab import drive
+   drive.mount("/content/drive")
+   ```
+
+2. Change into the repository directory (clone or upload it first) and run the utility against your dataset folder:
+
+   ```bash
+   %cd /content/path/to/image-text
+   !python remove_numbered_duplicates.py \
+       /content/drive/MyDrive/text2imagedataset/text2imagedataset
+   ```
+
+   Replace the path with the directory you want to clean. The script prints how many files it deleted, renamed, or kept. You can re-run it safely; once duplicates are gone it will simply report zero deletions.
+
 GPU support dramatically speeds up Stable Diffusion and other diffusion-based models, mirroring the Hugging Face guidance of moving models to CUDA when available.
 
 ## Troubleshooting
