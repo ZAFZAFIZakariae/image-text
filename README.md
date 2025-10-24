@@ -1,6 +1,6 @@
 # Image-Text Inference and Fine-Tuning
 
-This repository contains scripts for text-to-image generation and image captioning using Hugging Face Diffusers and Transformers. It includes inference utilities (`run_text2image.py`, `run_imagecaption.py`) as well as fine-tuning scripts (`fine_tune_text2image.py`, `fine_tune_image_caption.py`).
+This repository contains scripts for text-to-image generation and image captioning using Hugging Face Diffusers and Transformers. It includes inference utilities (`run_text2image.py`, `run_imagecaption.py`) as well as a full fine-tuning pipeline (`prepare_text_image_dataset.py`, `fine_tune_text2image.py`).
 
 ## Installation
 
@@ -41,14 +41,31 @@ Captions are saved alongside the input image unless an output path is specified.
 
 ## Fine-Tuning
 
-For advanced users, the repository includes starter scripts for fine-tuning both text-to-image and image captioning models:
+Follow these steps to adapt Stable Diffusion to your own images:
 
-```bash
-python fine_tune_text2image.py --config configs/text2image_config.yaml
-python fine_tune_image_caption.py --config configs/image_caption_config.yaml
-```
+1. **Generate captions for the dataset** – point the helper at a directory that contains the raw JPEG/PNG files. The script uses the BLIP captioning model to create a `metadata.jsonl` manifest with prompts for every image.
 
-Edit the configuration files to point to your datasets, model checkpoints, and training hyperparameters.
+   ```bash
+   python prepare_text_image_dataset.py \
+       --image-dir /path/to/your/images \
+       --output-path /path/to/dataset/metadata.jsonl
+   ```
+
+   The manifest stores relative file paths, so placing it next to the image directory keeps the structure portable. Re-run the command with `--refresh` if you need to regenerate captions.
+
+2. **Launch fine-tuning** – once you have the manifest, call the training script and point it at the dataset folder (containing the images and the newly created `metadata.jsonl`).
+
+   ```bash
+   python fine_tune_text2image.py \
+       --dataset-path /path/to/dataset \
+       --output-dir /path/to/checkpoints \
+       --pretrained-model runwayml/stable-diffusion-v1-5 \
+       --batch-size 4 \
+       --epochs 1 \
+       --mixed-precision
+   ```
+
+   The script saves checkpoints every `--save-interval` updates and resumes automatically when `--resume` is supplied. Increase `--epochs` and adjust the learning rate, batch size, and gradient accumulation to match your hardware.
 
 ## Running on Google Colab
 
