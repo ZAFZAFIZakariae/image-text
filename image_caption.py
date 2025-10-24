@@ -1,4 +1,4 @@
-"""Image captioning module using the BLIP base model.
+"""Image captioning module using the BLIP large model.
 
 This module provides a :func:`caption_image` function that loads either a local
 image or one referenced by a URL and generates a caption using the
@@ -46,11 +46,12 @@ def _load_model() -> Tuple[BlipProcessor, BlipForConditionalGeneration, torch.de
         _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load the pretrained processor and model as recommended in the BLIP
-        # documentation. The "Salesforce/blip-image-captioning-base" checkpoint
-        # is a good default for general-purpose captioning.
-        _PROCESSOR = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+        # documentation. Upgrading to the larger checkpoint yields richer and
+        # more descriptive captions compared to the base weights while keeping
+        # the same API surface.
+        _PROCESSOR = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
         _MODEL = BlipForConditionalGeneration.from_pretrained(
-            "Salesforce/blip-image-captioning-base"
+            "Salesforce/blip-image-captioning-large"
         ).to(_DEVICE)
 
         # Ensure the model is in evaluation mode. Caption generation does not
