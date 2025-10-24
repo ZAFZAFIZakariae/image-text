@@ -28,8 +28,10 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 
-# Match a trailing `` (digits)`` group after normalisation.
-COPY_SUFFIX = re.compile(r"\s*\((\d+)\)$")
+# Match a trailing `` (digits)`` group after normalisation.  Some providers add
+# extra whitespace inside the parentheses (e.g. ``" ( 1 )"``) so we accept
+# optional spaces around the digits.
+COPY_SUFFIX = re.compile(r"\s*\(\s*(\d+)\s*\)$")
 
 
 def _normalise_stem(stem: str) -> str:
@@ -64,8 +66,12 @@ def _normalise_stem(stem: str) -> str:
 
     collapsed = re.sub(r"\s+", " ", "".join(cleaned_chars)).strip()
 
-    match = COPY_SUFFIX.search(collapsed)
-    if match:
+    while True:
+        match = COPY_SUFFIX.search(collapsed)
+        if not match:
+            break
+        # ``foo (1) (2)`` should normalise all the way down to ``foo``; loop so
+        # that we strip every numbered suffix that appears.
         collapsed = collapsed[: match.start()].rstrip()
 
     return collapsed
