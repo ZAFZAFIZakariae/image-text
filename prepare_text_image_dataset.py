@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, TextIO
 
@@ -144,6 +145,46 @@ def _append_manifest_entry(handle: TextIO, image_key: str, caption: str) -> None
     handle.write("\n")
 
 
+def _flush_manifest_buffer(
+    handle: TextIO, buffer: List[tuple[str, str]]
+) -> None:
+    if not buffer:
+        return
+
+    for image_key, caption in buffer:
+        _append_manifest_entry(handle, image_key, caption)
+    handle.flush()
+    buffer.clear()
+
+
+_SENTENCE_BOUNDARY_REGEX = re.compile(r"(?<=[.!?])\s+")
+
+
+def _deduplicate_sentences(text: str) -> str:
+    """Collapse repeated sentences while preserving the original order.
+
+    BLIP-style captioning models occasionally generate the exact same sentence
+    multiple times.  The duplicates make the resulting manifest noisy and
+    repetitive, so we remove them by splitting on sentence boundaries and
+    keeping the first occurrence of each sentence (case-insensitive).
+    """
+
+    sentences = _SENTENCE_BOUNDARY_REGEX.split(text.strip())
+    if not sentences:
+        return text.strip()
+
+    seen = set()
+    unique_sentences: List[str] = []
+    for sentence in sentences:
+        normalized = re.sub(r"\s+", " ", sentence.strip()).lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_sentences.append(sentence.strip())
+
+    return " ".join(unique_sentences)
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -166,6 +207,8 @@ def main() -> None:
         if not args.refresh:
             manifest_handle.seek(0, 2)
 
+        pending_entries: List[tuple[str, str]] = []
+
         for path in tqdm(image_paths, desc="Captioning", unit="image"):
             relative_key = path.relative_to(args.image_dir).as_posix()
             if relative_key in existing:
@@ -181,11 +224,15 @@ def main() -> None:
                 do_sample=args.do_sample,
                 temperature=args.temperature,
             )
+            caption = _deduplicate_sentences(caption)
             captions[relative_key] = caption
             existing[relative_key] = caption
-            _append_manifest_entry(manifest_handle, relative_key, caption)
-            manifest_handle.flush()
+            pending_entries.append((relative_key, caption))
+            if len(pending_entries) >= 100:
+                _flush_manifest_buffer(manifest_handle, pending_entries)
             written += 1
+
+        _flush_manifest_buffer(manifest_handle, pending_entries)
 
     if args.refresh or written:
         _write_manifest(output_path, captions)
