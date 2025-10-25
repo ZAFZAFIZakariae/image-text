@@ -43,6 +43,14 @@ def parse_args() -> argparse.Namespace:
             "Equivalent to providing the positional IMAGE argument."
         ),
     )
+    parser.add_argument(
+        "--model",
+        default="Salesforce/blip-image-captioning-large",
+        help=(
+            "Optional Hugging Face identifier for a BLIP captioning model. "
+            "Defaults to the larger BLIP checkpoint for richer captions."
+        ),
+    )
     args = parser.parse_args()
 
     if args.image_path is not None and args.image is not None:
@@ -66,7 +74,7 @@ def main() -> None:
         image_reference = DEFAULT_IMAGE
 
     print(f"Captioning image: {image_reference}")
-    caption = caption_image(image_reference)
+    caption = caption_image(image_reference, model_name=args.model)
     print(f"Caption: {caption}")
 
 
