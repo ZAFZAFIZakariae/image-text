@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, TextIO
 
 from tqdm.auto import tqdm
 
@@ -99,6 +99,11 @@ def _write_manifest(manifest_path: Path, captions: Dict[str, str]) -> None:
             handle.write("\n")
 
 
+def _append_manifest_entry(handle: TextIO, image_key: str, caption: str) -> None:
+    json.dump({"file": image_key, "text": caption}, handle, ensure_ascii=False)
+    handle.write("\n")
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -110,24 +115,42 @@ def main() -> None:
     if args.limit is not None:
         image_paths = image_paths[: args.limit]
 
-    captions: Dict[str, str] = {}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    captions: Dict[str, str] = dict(existing)
     skipped = 0
-    for path in tqdm(image_paths, desc="Captioning", unit="image"):
-        relative_key = path.relative_to(args.image_dir).as_posix()
-        if not args.refresh and relative_key in existing:
-            captions[relative_key] = existing[relative_key]
-            skipped += 1
-            continue
+    written = 0
 
-        caption = caption_image(str(path))
-        captions[relative_key] = caption
+    mode = "w" if args.refresh else "a"
+    with output_path.open(mode, encoding="utf-8") as manifest_handle:
+        if not args.refresh:
+            manifest_handle.seek(0, 2)
 
-    _write_manifest(output_path, captions)
+        for path in tqdm(image_paths, desc="Captioning", unit="image"):
+            relative_key = path.relative_to(args.image_dir).as_posix()
+            if relative_key in existing:
+                skipped += 1
+                continue
 
-    print(
-        f"Wrote {len(captions)} captions to {output_path}."
-        + (f" Reused {skipped} existing entries." if skipped else "")
-    )
+            caption = caption_image(str(path))
+            captions[relative_key] = caption
+            existing[relative_key] = caption
+            _append_manifest_entry(manifest_handle, relative_key, caption)
+            manifest_handle.flush()
+            written += 1
+
+    if args.refresh or written:
+        _write_manifest(output_path, captions)
+
+    total_entries = len(captions)
+    message = [
+        f"Wrote {written} new caption{'s' if written != 1 else ''} to {output_path}.",
+        f"Total entries: {total_entries}.",
+    ]
+    if skipped:
+        message.append(f"Reused {skipped} existing entr{'ies' if skipped != 1 else 'y'}.")
+
+    print(" ".join(message))
 
 
 if __name__ == "__main__":
