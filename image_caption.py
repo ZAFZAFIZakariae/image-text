@@ -1,29 +1,35 @@
-"""Image captioning module using the BLIP large model.
+"""Image captioning helpers for BLIP and InstructBLIP checkpoints.
 
 This module provides a :func:`caption_image` function that loads either a local
-image or one referenced by a URL and generates a caption using the
-Salesforce BLIP image captioning model. The code follows the
-recommendations from the BLIP model card on Hugging Face.
+image or one referenced by a URL and generates a caption using a BLIP-family
+model hosted on Hugging Face.  Both the classic BLIP captioning checkpoints and
+the newer InstructBLIP variants are supported so callers can pick the captioning
+style that best fits their workflow.
 """
 
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 from urllib.parse import urlparse
 
 import requests
 import torch
 from PIL import Image
-from transformers import BlipForConditionalGeneration, BlipProcessor
+from transformers import (
+    BlipForConditionalGeneration,
+    BlipProcessor,
+    InstructBlipForConditionalGeneration,
+    InstructBlipProcessor,
+)
 
 # Global cache of loaded processors/models keyed by model identifier so the
-# weights are only materialized once per checkpoint. Loading the BLIP model is
+# weights are only materialized once per checkpoint. Loading these models is
 # relatively expensive, so keeping the objects around avoids paying the cost for
-# every call to ``caption_image``.
-_LOADED_MODELS: Dict[
-    str, Tuple[BlipProcessor, BlipForConditionalGeneration]
-] = {}
+# every call to ``caption_image``.  The final string in the tuple indicates which
+# processor/model pair was created so the captioning logic can branch
+# appropriately.
+_LOADED_MODELS: Dict[str, Tuple[Any, Any, str]] = {}
 _DEVICE: torch.device | None = None
 
 
@@ -35,13 +41,14 @@ def _is_url(path_or_url: str) -> bool:
 
 
 def _load_model(
-    model_name: str = "Salesforce/blip-image-captioning-large",
-) -> Tuple[BlipProcessor, BlipForConditionalGeneration, torch.device]:
-    """Lazy-load the BLIP processor and model, returning both along with the device.
+    model_name: str = "Salesforce/instructblip-flan-t5-xl",
+) -> Tuple[Any, Any, torch.device, str]:
+    """Lazy-load the processor and model, returning both along with the device.
 
     The function caches the loaded objects in module-level globals to ensure that
     multiple caption requests reuse the same processor and model. The cache is
-    keyed by ``model_name`` so callers can select different BLIP checkpoints.
+    keyed by ``model_name`` so callers can select different BLIP or InstructBLIP
+    checkpoints.
     """
 
     global _DEVICE
@@ -51,26 +58,37 @@ def _load_model(
         _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if model_name not in _LOADED_MODELS:
-        # Load the pretrained processor and model requested by the caller. The
-        # default remains the larger checkpoint for richer captions, but any
-        # compatible BLIP variant can be supplied.
-        processor = BlipProcessor.from_pretrained(model_name)
-        model = BlipForConditionalGeneration.from_pretrained(model_name).to(_DEVICE)
+        model_name_lower = model_name.lower()
+
+        if "instructblip" in model_name_lower:
+            processor = InstructBlipProcessor.from_pretrained(model_name)
+            model = (
+                InstructBlipForConditionalGeneration.from_pretrained(model_name)
+                .to(_DEVICE)
+            )
+            architecture = "instructblip"
+        else:
+            processor = BlipProcessor.from_pretrained(model_name)
+            model = BlipForConditionalGeneration.from_pretrained(model_name).to(
+                _DEVICE
+            )
+            architecture = "blip"
 
         # Ensure the model is in evaluation mode. Caption generation does not
         # require gradient computation, so we disable it to save memory.
         model.eval()
-        _LOADED_MODELS[model_name] = (processor, model)
+        _LOADED_MODELS[model_name] = (processor, model, architecture)
 
-    processor, model = _LOADED_MODELS[model_name]
+    processor, model, architecture = _LOADED_MODELS[model_name]
     assert _DEVICE is not None
-    return processor, model, _DEVICE
+    return processor, model, _DEVICE, architecture
 
 
 def caption_image(
     image_path_or_url: str,
     *,
-    model_name: str = "Salesforce/blip-image-captioning-large",
+    model_name: str = "Salesforce/instructblip-flan-t5-xl",
+    instruct_prompt: str = "Describe the image in detail.",
 ) -> str:
     """Generate a descriptive caption for ``image_path_or_url``.
 
@@ -86,7 +104,7 @@ def caption_image(
         PIL.UnidentifiedImageError: If the data cannot be interpreted as an image.
     """
 
-    processor, model, device = _load_model(model_name)
+    processor, model, device, architecture = _load_model(model_name)
 
     # Load the image from disk or over HTTP. We convert the image to RGB because
     # BLIP expects three channels.
@@ -98,13 +116,21 @@ def caption_image(
         image = Image.open(image_path_or_url).convert("RGB")
 
     # Run the image through the processor and the model to obtain caption tokens.
-    inputs = processor(images=image, return_tensors="pt").to(device)
+    if architecture == "instructblip":
+        inputs = processor(
+            images=image, text=instruct_prompt, return_tensors="pt"
+        ).to(device)
+    else:
+        inputs = processor(images=image, return_tensors="pt").to(device)
 
     with torch.no_grad():
         output = model.generate(**inputs)
 
     # Decode the generated tokens back into text and strip excess whitespace.
-    caption = processor.decode(output[0], skip_special_tokens=True).strip()
+    if architecture == "instructblip":
+        caption = processor.batch_decode(output, skip_special_tokens=True)[0].strip()
+    else:
+        caption = processor.decode(output[0], skip_special_tokens=True).strip()
     return caption
 
 

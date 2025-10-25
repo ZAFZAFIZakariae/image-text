@@ -49,6 +49,14 @@ def _parse_args() -> argparse.Namespace:
         help="Ignore existing captions and regenerate everything from scratch.",
     )
     parser.add_argument(
+        "--model",
+        default="Salesforce/instructblip-flan-t5-xl",
+        help=(
+            "Optional Hugging Face identifier for a BLIP or InstructBLIP model to use "
+            "when generating captions (default: Salesforce/instructblip-flan-t5-xl)."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -132,7 +140,7 @@ def main() -> None:
                 skipped += 1
                 continue
 
-            caption = caption_image(str(path))
+            caption = caption_image(str(path), model_name=args.model)
             captions[relative_key] = caption
             existing[relative_key] = caption
             _append_manifest_entry(manifest_handle, relative_key, caption)
