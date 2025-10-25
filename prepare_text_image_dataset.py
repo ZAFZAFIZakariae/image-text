@@ -57,6 +57,38 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--instruct-prompt",
+        type=str,
+        default="Describe the image in detail.",
+        help=(
+            "Prompt to feed InstructBLIP checkpoints. Adjust this when you want to steer "
+            "the style of the generated captions (default: Describe the image in detail.)."
+        ),
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=128,
+        help="Maximum number of tokens to generate for each caption (default: 128).",
+    )
+    parser.add_argument(
+        "--num-beams",
+        type=int,
+        default=1,
+        help="Number of beams to use during caption generation (default: 1).",
+    )
+    parser.add_argument(
+        "--do-sample",
+        action="store_true",
+        help="Enable sampling instead of greedy decoding (default: disabled).",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Sampling temperature to use when --do-sample is supplied.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -140,7 +172,15 @@ def main() -> None:
                 skipped += 1
                 continue
 
-            caption = caption_image(str(path), model_name=args.model)
+            caption = caption_image(
+                str(path),
+                model_name=args.model,
+                instruct_prompt=args.instruct_prompt,
+                max_new_tokens=args.max_new_tokens,
+                num_beams=args.num_beams,
+                do_sample=args.do_sample,
+                temperature=args.temperature,
+            )
             captions[relative_key] = caption
             existing[relative_key] = caption
             _append_manifest_entry(manifest_handle, relative_key, caption)
