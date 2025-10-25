@@ -9,7 +9,7 @@ recommendations from the BLIP model card on Hugging Face.
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Tuple
+from typing import Dict, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -17,11 +17,13 @@ import torch
 from PIL import Image
 from transformers import BlipForConditionalGeneration, BlipProcessor
 
-# Global singleton references to the processor and model so that they are only
-# loaded once. Loading the BLIP model is relatively expensive, so keeping the
-# objects around avoids paying the cost for every call to ``caption_image``.
-_PROCESSOR: BlipProcessor | None = None
-_MODEL: BlipForConditionalGeneration | None = None
+# Global cache of loaded processors/models keyed by model identifier so the
+# weights are only materialized once per checkpoint. Loading the BLIP model is
+# relatively expensive, so keeping the objects around avoids paying the cost for
+# every call to ``caption_image``.
+_LOADED_MODELS: Dict[
+    str, Tuple[BlipProcessor, BlipForConditionalGeneration]
+] = {}
 _DEVICE: torch.device | None = None
 
 
@@ -32,40 +34,44 @@ def _is_url(path_or_url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _load_model() -> Tuple[BlipProcessor, BlipForConditionalGeneration, torch.device]:
+def _load_model(
+    model_name: str = "Salesforce/blip-image-captioning-large",
+) -> Tuple[BlipProcessor, BlipForConditionalGeneration, torch.device]:
     """Lazy-load the BLIP processor and model, returning both along with the device.
 
     The function caches the loaded objects in module-level globals to ensure that
-    multiple caption requests reuse the same processor and model.
+    multiple caption requests reuse the same processor and model. The cache is
+    keyed by ``model_name`` so callers can select different BLIP checkpoints.
     """
 
-    global _PROCESSOR, _MODEL, _DEVICE
+    global _DEVICE
 
-    if _PROCESSOR is None or _MODEL is None or _DEVICE is None:
+    if _DEVICE is None:
         # Choose GPU when available, otherwise fall back to CPU execution.
         _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load the pretrained processor and model as recommended in the BLIP
-        # documentation. Upgrading to the larger checkpoint yields richer and
-        # more descriptive captions compared to the base weights while keeping
-        # the same API surface.
-        _PROCESSOR = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
-        _MODEL = BlipForConditionalGeneration.from_pretrained(
-            "Salesforce/blip-image-captioning-large"
-        ).to(_DEVICE)
+    if model_name not in _LOADED_MODELS:
+        # Load the pretrained processor and model requested by the caller. The
+        # default remains the larger checkpoint for richer captions, but any
+        # compatible BLIP variant can be supplied.
+        processor = BlipProcessor.from_pretrained(model_name)
+        model = BlipForConditionalGeneration.from_pretrained(model_name).to(_DEVICE)
 
         # Ensure the model is in evaluation mode. Caption generation does not
         # require gradient computation, so we disable it to save memory.
-        _MODEL.eval()
+        model.eval()
+        _LOADED_MODELS[model_name] = (processor, model)
 
-    # The type checker needs reassurance that the globals are populated.
-    assert _PROCESSOR is not None
-    assert _MODEL is not None
+    processor, model = _LOADED_MODELS[model_name]
     assert _DEVICE is not None
-    return _PROCESSOR, _MODEL, _DEVICE
+    return processor, model, _DEVICE
 
 
-def caption_image(image_path_or_url: str) -> str:
+def caption_image(
+    image_path_or_url: str,
+    *,
+    model_name: str = "Salesforce/blip-image-captioning-large",
+) -> str:
     """Generate a descriptive caption for ``image_path_or_url``.
 
     Args:
@@ -80,7 +86,7 @@ def caption_image(image_path_or_url: str) -> str:
         PIL.UnidentifiedImageError: If the data cannot be interpreted as an image.
     """
 
-    processor, model, device = _load_model()
+    processor, model, device = _load_model(model_name)
 
     # Load the image from disk or over HTTP. We convert the image to RGB because
     # BLIP expects three channels.
