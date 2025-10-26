@@ -31,19 +31,35 @@ except ImportError:  # pragma: no cover - diffusers must be installed
     raise
 
 try:  # pragma: no cover - optional dependency in older diffusers versions
-    from diffusers import StableDiffusionXLRefinerPipeline
+    from diffusers import StableDiffusionXLImg2ImgPipeline
 except ImportError:  # pragma: no cover - gracefully degrade when refiner is unavailable
+    StableDiffusionXLImg2ImgPipeline = None  # type: ignore[assignment]
+
+# diffusers 0.20 added StableDiffusionXLImg2ImgPipeline, while some downstream
+# forks still expose the earlier StableDiffusionXLRefinerPipeline alias. Import
+# the alias when available so the rest of the module can treat both classes the
+# same way.
+try:  # pragma: no cover - optional dependency in older diffusers versions
+    from diffusers import StableDiffusionXLRefinerPipeline  # type: ignore
+except ImportError:  # pragma: no cover - silently fall back to the img2img class
     StableDiffusionXLRefinerPipeline = None  # type: ignore[assignment]
 from PIL import Image
 
 
 logger = logging.getLogger(__name__)
 
-if StableDiffusionXLRefinerPipeline is None:  # pragma: no cover - logging only
+_REFINER_PIPELINE_CLS = None
+if StableDiffusionXLImg2ImgPipeline is not None:
+    _REFINER_PIPELINE_CLS = StableDiffusionXLImg2ImgPipeline
+elif StableDiffusionXLRefinerPipeline is not None:
+    _REFINER_PIPELINE_CLS = StableDiffusionXLRefinerPipeline
+
+if _REFINER_PIPELINE_CLS is None:  # pragma: no cover - logging only
     logger.warning(
-        "StableDiffusionXLRefinerPipeline could not be imported. "
-        "Install diffusers>=0.20.0 to enable the refiner stage and the "
-        "`base+refiner` workflow."
+        "Stable Diffusion XL refiner support is unavailable because the "
+        "img2img/refiner pipeline class could not be imported. Install "
+        "diffusers>=0.20.0 (and its optional dependencies) to enable the "
+        "two-stage `base+refiner` workflow."
     )
 
 @dataclass(frozen=True)
@@ -80,11 +96,11 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
         variant="fp16",
         refiner_model_id=(
             "stabilityai/stable-diffusion-xl-refiner-1.0"
-            if StableDiffusionXLRefinerPipeline is not None
+            if _REFINER_PIPELINE_CLS is not None
             else None
         ),
-        refiner_cls=StableDiffusionXLRefinerPipeline,
-        refiner_variant="fp16" if StableDiffusionXLRefinerPipeline is not None else None,
+        refiner_cls=_REFINER_PIPELINE_CLS,
+        refiner_variant="fp16" if _REFINER_PIPELINE_CLS is not None else None,
         refiner_high_noise_frac=0.8,
     ),
     "animagine-xl-3.0": ModelConfig(
@@ -290,8 +306,8 @@ def generate_image(
         raise ValueError(
             "The requested base+refiner workflow requires a refiner pipeline, "
             "but the selected model does not provide one. "
-            "Install diffusers>=0.20.0 and ensure the model includes "
-            "`stable-diffusion-xl-refiner-1.0`."
+            "Install diffusers>=0.20.0 (with accelerate and safetensors) and "
+            "ensure the model includes `stabilityai/stable-diffusion-xl-refiner-1.0`."
         )
 
     should_use_refiner = (

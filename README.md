@@ -11,7 +11,7 @@ This repository contains scripts for text-to-image generation and image captioni
    pip install -r requirements.txt
    ```
 
-   The requirements closely follow the setup recommended in the Diffusers documentation. Make sure you have a recent version of `pip`. If you are targeting GPU execution (e.g., CUDA 11.8 on Colab), install PyTorch from the official index first using the command shown in the Colab section below so that `pip install -r requirements.txt` reuses that compatible wheel.
+   The requirements include the SDXL refiner dependencies (`accelerate` and `safetensors`) and follow the setup recommended in the Diffusers documentation. Make sure you have a recent version of `pip`. If you are targeting GPU execution (e.g., CUDA 11.8 on Colab), install PyTorch from the official index first using the command shown in the Colab section below so that `pip install -r requirements.txt` reuses that compatible wheel.
 
 ## Running Inference
 
@@ -31,7 +31,7 @@ The ``--model`` flag accepts aliases for the bundled configurations (``stable-di
 
 Control the diffusion pass with ``--workflow``:
 
-- ``auto`` (default) runs the refiner whenever the selected model includes one.
+- ``auto`` (default) runs the refiner whenever the selected model includes one. SDXL users should ensure the `stabilityai/stable-diffusion-xl-refiner-1.0` checkpoint is accessible (log in with `huggingface_hub` if required) so the workflow can download the weights on first use.
 - ``base-only`` forces a single pass through the base pipeline.
 - ``base+refiner`` requires the two-stage SDXL workflow and errors if a refiner is unavailable.
 
