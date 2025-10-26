@@ -23,10 +23,17 @@ Use the provided script to generate images from prompts:
 python run_text2image.py \
     --prompt "A futuristic cityscape at sunset" \
     --output outputs/text2image.png \
-    --model "Animagine XL 3.0"
+    --model "Animagine XL 3.0" \
+    --workflow base-only
 ```
 
 The ``--model`` flag accepts aliases for the bundled configurations (``stable-diffusion-xl-1.0`` and ``animagine-xl-3.0``) as well as any Hugging Face model identifier. Leaving the option blank uses Stable Diffusion XL 1.0. Regardless of the model, pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
+
+Control the diffusion pass with ``--workflow``:
+
+- ``auto`` (default) runs the refiner whenever the selected model includes one.
+- ``base-only`` forces a single pass through the base pipeline.
+- ``base+refiner`` requires the two-stage SDXL workflow and errors if a refiner is unavailable.
 
 ### Image Captioning
 
@@ -101,18 +108,26 @@ below to get the SDXL base+refiner workflow running on a GPU runtime:
 
    Paste your token when prompted. You can skip this step if you already have
    the models cached in your Colab session or are using public checkpoints.
-4. **Generate an image.** The refiner automatically runs whenever the
-   `stable-diffusion-xl-1.0` alias is selected, so a single command kicks off
-   the two-stage SDXL workflow:
+4. **Generate an image.** Choose the workflow that fits your needs. The example
+   below runs the default two-stage SDXL pipeline with refiner:
 
    ```python
    !python run_text2image.py \
        --prompt "A futuristic cityscape at sunset" \
-       --output outputs/sdxl_refined.png
+       --output outputs/sdxl_refined.png \
+       --workflow base+refiner
    ```
 
    To try a different checkpoint, pass `--model` with another alias or Hugging
-   Face model ID.
+   Face model ID. To run SDXL without the refiner (which lowers memory usage on
+   smaller GPUs), switch the workflow flag:
+
+   ```python
+   !python run_text2image.py \
+       --prompt "A futuristic cityscape at sunset" \
+       --output outputs/sdxl_base.png \
+       --workflow base-only
+   ```
 
 ### Removing numbered duplicates on Colab
 

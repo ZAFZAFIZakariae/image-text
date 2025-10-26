@@ -15,6 +15,7 @@ from pathlib import Path
 from text2image_pipeline import (
     AVAILABLE_MODELS,
     DEFAULT_MODEL_NAME,
+    WORKFLOW_CHOICES,
     generate_image,
 )
 
@@ -50,6 +51,17 @@ def parse_args() -> argparse.Namespace:
             f"Known aliases: {', '.join(AVAILABLE_MODELS)}"
         ),
     )
+    parser.add_argument(
+        "--workflow",
+        "-w",
+        default="auto",
+        choices=WORKFLOW_CHOICES,
+        help=(
+            "Diffusion workflow to execute. 'auto' runs the refiner when the "
+            "selected model provides one, 'base-only' skips the refiner, and "
+            "'base+refiner' requires the two-stage SDXL pass."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -65,7 +77,7 @@ def main() -> None:
     selected_model = model_choice or DEFAULT_MODEL_NAME
     print(f"Using model: {selected_model}")
 
-    image = generate_image(prompt, model=model_choice)
+    image = generate_image(prompt, model=model_choice, workflow=args.workflow)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path)

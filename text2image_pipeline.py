@@ -215,7 +215,23 @@ def _disable_safety_checker(images, **kwargs):
     return images, [False] * len(images)
 
 
-def generate_image(prompt: str, model: Optional[str] = None) -> Image.Image:
+_WORKFLOW_AUTO = "auto"
+_WORKFLOW_BASE_ONLY = "base-only"
+_WORKFLOW_BASE_REFINER = "base+refiner"
+_VALID_WORKFLOWS = {
+    _WORKFLOW_AUTO,
+    _WORKFLOW_BASE_ONLY,
+    _WORKFLOW_BASE_REFINER,
+}
+
+WORKFLOW_CHOICES = tuple(sorted(_VALID_WORKFLOWS))
+
+
+def generate_image(
+    prompt: str,
+    model: Optional[str] = None,
+    workflow: Optional[str] = None,
+) -> Image.Image:
     """Generate an image from a text prompt.
 
     Parameters
@@ -226,6 +242,12 @@ def generate_image(prompt: str, model: Optional[str] = None) -> Image.Image:
         Optional alias or Hugging Face model identifier designating which
         diffusion pipeline to run. When omitted the default configured model
         (Stable Diffusion XL 1.0) is used.
+
+    workflow:
+        Controls which parts of the diffusion pipeline should execute. The
+        supported values are ``"auto"`` (default behaviour), ``"base-only"``
+        to skip any loaded refiner, and ``"base+refiner"`` to require a
+        two-pass SDXL run. The comparison is case-insensitive.
 
     Returns
     -------
@@ -239,7 +261,26 @@ def generate_image(prompt: str, model: Optional[str] = None) -> Image.Image:
     base_pipeline = pipelines.base
     refiner_pipeline = pipelines.refiner
 
-    if refiner_pipeline is None:
+    selected_workflow = (workflow or _WORKFLOW_AUTO).strip().lower()
+
+    if selected_workflow not in _VALID_WORKFLOWS:
+        raise ValueError(
+            "Invalid workflow requested. Expected one of "
+            f"{sorted(_VALID_WORKFLOWS)}, got {workflow!r}."
+        )
+
+    if selected_workflow == _WORKFLOW_BASE_REFINER and refiner_pipeline is None:
+        raise ValueError(
+            "The requested base+refiner workflow cannot run because the "
+            "selected model does not provide a refiner pipeline."
+        )
+
+    should_use_refiner = (
+        selected_workflow == _WORKFLOW_BASE_REFINER
+        or (selected_workflow == _WORKFLOW_AUTO and refiner_pipeline is not None)
+    )
+
+    if not should_use_refiner:
         output = base_pipeline(prompt)
         return output.images[0]
 
