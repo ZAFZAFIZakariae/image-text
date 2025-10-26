@@ -26,19 +26,25 @@ try:
         DiffusionPipeline,
         StableDiffusionPipeline,
         StableDiffusionXLPipeline,
-        StableDiffusionXLRefinerPipeline,
     )
-except ImportError as exc:  # pragma: no cover - ensure the SDXL refiner is available
-    if "StableDiffusionXLRefinerPipeline" in str(exc):
-        raise ImportError(
-            "StableDiffusionXLRefinerPipeline is required but missing. "
-            "Upgrade diffusers to version 0.20.0 or newer to enable the SDXL refiner workflow."
-        ) from exc
+except ImportError:  # pragma: no cover - diffusers must be installed
     raise
+
+try:  # pragma: no cover - optional dependency in older diffusers versions
+    from diffusers import StableDiffusionXLRefinerPipeline
+except ImportError:  # pragma: no cover - gracefully degrade when refiner is unavailable
+    StableDiffusionXLRefinerPipeline = None  # type: ignore[assignment]
 from PIL import Image
 
 
 logger = logging.getLogger(__name__)
+
+if StableDiffusionXLRefinerPipeline is None:  # pragma: no cover - logging only
+    logger.warning(
+        "StableDiffusionXLRefinerPipeline could not be imported. "
+        "SDXL workflows will fall back to the base pipeline only. "
+        "Install diffusers>=0.20.0 to enable the refiner stage."
+    )
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -72,9 +78,13 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
         model_id="stabilityai/stable-diffusion-xl-base-1.0",
         pipeline_cls=StableDiffusionXLPipeline,
         variant="fp16",
-        refiner_model_id="stabilityai/stable-diffusion-xl-refiner-1.0",
+        refiner_model_id=(
+            "stabilityai/stable-diffusion-xl-refiner-1.0"
+            if StableDiffusionXLRefinerPipeline is not None
+            else None
+        ),
         refiner_cls=StableDiffusionXLRefinerPipeline,
-        refiner_variant="fp16",
+        refiner_variant="fp16" if StableDiffusionXLRefinerPipeline is not None else None,
         refiner_high_noise_frac=0.8,
     ),
     "animagine-xl-3.0": ModelConfig(
