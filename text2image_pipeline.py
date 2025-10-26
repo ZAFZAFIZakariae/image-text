@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 if StableDiffusionXLRefinerPipeline is None:  # pragma: no cover - logging only
     logger.warning(
         "StableDiffusionXLRefinerPipeline could not be imported. "
-        "SDXL workflows will fall back to the base pipeline only. "
-        "Install diffusers>=0.20.0 to enable the refiner stage."
+        "Install diffusers>=0.20.0 to enable the refiner stage and the "
+        "`base+refiner` workflow."
     )
 
 @dataclass(frozen=True)
@@ -288,8 +288,10 @@ def generate_image(
 
     if selected_workflow == _WORKFLOW_BASE_REFINER and refiner_pipeline is None:
         raise ValueError(
-            "The requested base+refiner workflow cannot run because the "
-            "selected model does not provide a refiner pipeline."
+            "The requested base+refiner workflow requires a refiner pipeline, "
+            "but the selected model does not provide one. "
+            "Install diffusers>=0.20.0 and ensure the model includes "
+            "`stable-diffusion-xl-refiner-1.0`."
         )
 
     should_use_refiner = (
