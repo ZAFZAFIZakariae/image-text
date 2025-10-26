@@ -50,6 +50,16 @@ def parse_args() -> argparse.Namespace:
             f"Known aliases: {', '.join(AVAILABLE_MODELS)}"
         ),
     )
+    parser.add_argument(
+        "--workflow",
+        choices=("auto", "base-only", "base+refiner"),
+        default="auto",
+        help=(
+            "Select whether to run just the base pipeline, force the two-stage "
+            "base+refiner flow, or automatically choose based on the selected "
+            "model."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -65,7 +75,10 @@ def main() -> None:
     selected_model = model_choice or DEFAULT_MODEL_NAME
     print(f"Using model: {selected_model}")
 
-    image = generate_image(prompt, model=model_choice)
+    workflow = args.workflow
+    print(f"Workflow: {workflow}")
+
+    image = generate_image(prompt, model=model_choice, workflow=workflow)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path)

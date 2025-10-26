@@ -28,6 +28,26 @@ python run_text2image.py \
 
 The ``--model`` flag accepts aliases for the bundled configurations (``stable-diffusion-xl-1.0`` and ``animagine-xl-3.0``) as well as any Hugging Face model identifier. Leaving the option blank uses Stable Diffusion XL 1.0. Regardless of the model, pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
 
+#### Choosing between base-only and base+refiner workflows
+
+When a model exposes a refiner (such as the bundled SDXL 1.0 preset), you can explicitly control whether the script runs the two-stage flow or sticks to the faster base pass:
+
+```bash
+# Run SDXL with only the base pipeline
+python run_text2image.py \
+    --prompt "A futuristic cityscape at sunset" \
+    --output outputs/sdxl_base.png \
+    --workflow base-only
+
+# Run SDXL with the base+refiner workflow
+python run_text2image.py \
+    --prompt "A futuristic cityscape at sunset" \
+    --output outputs/sdxl_refined.png \
+    --workflow base+refiner
+```
+
+Leaving ``--workflow`` unset defaults to ``auto``, which automatically picks the two-stage flow when a refiner is configured for the chosen model and falls back to the base pipeline otherwise.
+
 ### Image Captioning
 
 Generate captions for images with:
@@ -69,22 +89,59 @@ Follow these steps to adapt Stable Diffusion to your own images:
 
 ## Running on Google Colab
 
-If you prefer to experiment in Google Colab:
+The repo runs well inside a single Colab notebook cell sequence. Use the steps
+below to get the SDXL base+refiner workflow running on a GPU runtime:
 
-1. Open a new notebook and enable a GPU runtime via **Runtime → Change runtime type → Hardware accelerator → GPU**.
-2. In a cell, install the dependencies:
+1. **Enable a GPU** – open **Runtime → Change runtime type** and select
+   **GPU**.
+2. **Clone the repository** (or upload it manually) and install dependencies.
+   The snippet below keeps everything inside `/content` so the rest of the
+   commands work verbatim:
 
    ```python
+   !git clone https://github.com/<your-account>/image-text.git
+   %cd image-text
+
    !pip install --upgrade pip
    !pip install torch --index-url https://download.pytorch.org/whl/cu118
    !pip install -r requirements.txt
    ```
 
-   The separate `torch` installation ensures that Colab (or any CUDA-enabled runtime) receives a current GPU build before the
-   remaining packages are installed. The requirement file now accepts any modern PyTorch release (2.2 or newer), so the command
-   above will stay compatible as PyTorch publishes new wheels.
+   Installing PyTorch first guarantees that Colab downloads a CUDA-enabled
+   wheel (matching the hosted GPU). The requirements file then installs the
+   Diffusers stack used by the pipelines.
+3. **Authenticate with Hugging Face (optional but recommended).** SDXL weights
+   live behind the Stability AI license gate, so run the following in a cell if
+   your account needs a token to download the checkpoints:
 
-3. Upload or clone this repository into the notebook environment and run the same commands described above (e.g., `!python run_text2image.py --prompt "A futuristic cityscape at sunset"`).
+   ```python
+   from huggingface_hub import login
+   login()
+   ```
+
+   Paste your token when prompted. You can skip this step if you already have
+   the models cached in your Colab session or are using public checkpoints.
+4. **Generate an image.** The ``--workflow`` flag lets you experiment with the
+   refiner without changing any code. For example, these two cells run the base
+   pass and the full two-stage SDXL pipeline respectively:
+
+   ```python
+   # Base-only SDXL pass (faster, less detailed)
+   !python run_text2image.py \
+       --prompt "A futuristic cityscape at sunset" \
+       --output outputs/sdxl_base.png \
+       --workflow base-only
+
+   # Base + refiner SDXL workflow (slower, sharper details)
+   !python run_text2image.py \
+       --prompt "A futuristic cityscape at sunset" \
+       --output outputs/sdxl_refined.png \
+       --workflow base+refiner
+   ```
+
+   To try a different checkpoint, pass `--model` with another alias or Hugging
+   Face model ID. Leaving ``--workflow`` at the default ``auto`` keeps using the
+   refiner whenever the model defines one.
 
 ### Removing numbered duplicates on Colab
 
