@@ -21,17 +21,20 @@ from typing import Dict, Optional, Tuple, Type
 from inspect import signature
 
 import torch
-from diffusers import (
-    DiffusionPipeline,
-    StableDiffusionPipeline,
-    StableDiffusionXLPipeline,
-    StableDiffusionXLRefinerPipeline,
-)
+from diffusers import DiffusionPipeline, StableDiffusionPipeline, StableDiffusionXLPipeline
+
+try:  # pragma: no cover - provide a clearer guidance when the refiner is missing
+    from diffusers import StableDiffusionXLRefinerPipeline  # type: ignore
+except ImportError as exc:
+    raise ImportError(
+        "StableDiffusionXLRefinerPipeline is required for the SDXL workflow. "
+        "Please upgrade to the latest diffusers release (pip install --upgrade diffusers) "
+        "to ensure the best performance."
+    ) from exc
 from PIL import Image
 
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass(frozen=True)
 class ModelConfig:
