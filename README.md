@@ -69,22 +69,50 @@ Follow these steps to adapt Stable Diffusion to your own images:
 
 ## Running on Google Colab
 
-If you prefer to experiment in Google Colab:
+The repo runs well inside a single Colab notebook cell sequence. Use the steps
+below to get the SDXL base+refiner workflow running on a GPU runtime:
 
-1. Open a new notebook and enable a GPU runtime via **Runtime → Change runtime type → Hardware accelerator → GPU**.
-2. In a cell, install the dependencies:
+1. **Enable a GPU** – open **Runtime → Change runtime type** and select
+   **GPU**.
+2. **Clone the repository** (or upload it manually) and install dependencies.
+   The snippet below keeps everything inside `/content` so the rest of the
+   commands work verbatim:
 
    ```python
+   !git clone https://github.com/<your-account>/image-text.git
+   %cd image-text
+
    !pip install --upgrade pip
    !pip install torch --index-url https://download.pytorch.org/whl/cu118
    !pip install -r requirements.txt
    ```
 
-   The separate `torch` installation ensures that Colab (or any CUDA-enabled runtime) receives a current GPU build before the
-   remaining packages are installed. The requirement file now accepts any modern PyTorch release (2.2 or newer), so the command
-   above will stay compatible as PyTorch publishes new wheels.
+   Installing PyTorch first guarantees that Colab downloads a CUDA-enabled
+   wheel (matching the hosted GPU). The requirements file then installs the
+   Diffusers stack used by the pipelines.
+3. **Authenticate with Hugging Face (optional but recommended).** SDXL weights
+   live behind the Stability AI license gate, so run the following in a cell if
+   your account needs a token to download the checkpoints:
 
-3. Upload or clone this repository into the notebook environment and run the same commands described above (e.g., `!python run_text2image.py --prompt "A futuristic cityscape at sunset"`).
+   ```python
+   from huggingface_hub import login
+   login()
+   ```
+
+   Paste your token when prompted. You can skip this step if you already have
+   the models cached in your Colab session or are using public checkpoints.
+4. **Generate an image.** The refiner automatically runs whenever the
+   `stable-diffusion-xl-1.0` alias is selected, so a single command kicks off
+   the two-stage SDXL workflow:
+
+   ```python
+   !python run_text2image.py \
+       --prompt "A futuristic cityscape at sunset" \
+       --output outputs/sdxl_refined.png
+   ```
+
+   To try a different checkpoint, pass `--model` with another alias or Hugging
+   Face model ID.
 
 ### Removing numbered duplicates on Colab
 

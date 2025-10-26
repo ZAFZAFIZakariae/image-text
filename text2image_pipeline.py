@@ -25,6 +25,7 @@ from diffusers import (
     DiffusionPipeline,
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
+    StableDiffusionXLRefinerPipeline,
 )
 from PIL import Image
 
@@ -39,6 +40,18 @@ class ModelConfig:
     model_id: str
     pipeline_cls: Type[DiffusionPipeline]
     variant: Optional[str] = None
+    refiner_model_id: Optional[str] = None
+    refiner_cls: Optional[Type[DiffusionPipeline]] = None
+    refiner_variant: Optional[str] = None
+    refiner_high_noise_frac: Optional[float] = None
+
+
+@dataclass
+class LoadedPipelines:
+    """Container holding the primary pipeline and optional refiner."""
+
+    base: DiffusionPipeline
+    refiner: Optional[DiffusionPipeline] = None
 
 
 DEFAULT_MODEL_NAME = "stable-diffusion-xl-1.0"
@@ -52,6 +65,10 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
         model_id="stabilityai/stable-diffusion-xl-base-1.0",
         pipeline_cls=StableDiffusionXLPipeline,
         variant="fp16",
+        refiner_model_id="stabilityai/stable-diffusion-xl-refiner-1.0",
+        refiner_cls=StableDiffusionXLRefinerPipeline,
+        refiner_variant="fp16",
+        refiner_high_noise_frac=0.8,
     ),
     "animagine-xl-3.0": ModelConfig(
         model_id="cagliostrolab/animagine-xl-3.0",
@@ -62,7 +79,7 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
 
 AVAILABLE_MODELS = tuple(sorted(_MODEL_REGISTRY))
 
-_PIPELINE_CACHE: Dict[str, DiffusionPipeline] = {}
+_PIPELINE_CACHE: Dict[str, LoadedPipelines] = {}
 
 
 def _normalise_model_name(model_name: str) -> str:
@@ -95,13 +112,13 @@ def _resolve_model(model_name: Optional[str]) -> Tuple[str, ModelConfig]:
     return requested, ModelConfig(model_id=requested, pipeline_cls=StableDiffusionPipeline)
 
 
-def _load_pipeline(model_name: Optional[str] = None) -> DiffusionPipeline:
-    """Load (or retrieve from cache) a diffusion pipeline instance."""
+def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, LoadedPipelines]:
+    """Load (or retrieve from cache) the pipelines for a given model."""
 
     cache_key, config = _resolve_model(model_name)
 
     if cache_key in _PIPELINE_CACHE:
-        return _PIPELINE_CACHE[cache_key]
+        return config, _PIPELINE_CACHE[cache_key]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -111,60 +128,77 @@ def _load_pipeline(model_name: Optional[str] = None) -> DiffusionPipeline:
         torch.float16 if device == "cuda" else torch.float32
     )
 
-    model_id = config.model_id
+    def _instantiate_pipeline(
+        model_id: str,
+        pipeline_cls: Type[DiffusionPipeline],
+        variant: Optional[str],
+        stage_label: str,
+    ) -> DiffusionPipeline:
+        load_kwargs = {}
+        if torch_dtype is not None:
+            pretrained_signature = signature(pipeline_cls.from_pretrained)
+            if "dtype" in pretrained_signature.parameters:
+                load_kwargs["dtype"] = torch_dtype
+            else:
+                load_kwargs["torch_dtype"] = torch_dtype
 
-    load_kwargs = {}
-    if torch_dtype is not None:
-        pretrained_signature = signature(config.pipeline_cls.from_pretrained)
-        if "dtype" in pretrained_signature.parameters:
-            load_kwargs["dtype"] = torch_dtype
-        else:
-            load_kwargs["torch_dtype"] = torch_dtype
+        if variant is not None and torch_dtype == torch.float16:
+            load_kwargs.setdefault("variant", variant)
 
-    if config.variant is not None and torch_dtype == torch.float16:
-        load_kwargs.setdefault("variant", config.variant)
+        try:
+            pipeline = pipeline_cls.from_pretrained(model_id, **load_kwargs)
+        except ValueError as exc:
+            should_retry_without_variant = (
+                "variant" in load_kwargs
+                and variant is not None
+                and "variant=" in str(exc)
+            )
 
-    try:
-        pipeline = config.pipeline_cls.from_pretrained(model_id, **load_kwargs)
-    except ValueError as exc:
-        should_retry_without_variant = (
-            "variant" in load_kwargs
-            and config.variant is not None
-            and "variant=" in str(exc)
+            if should_retry_without_variant:
+                logger.warning(
+                    "%s model %s does not provide the '%s' variant; falling back to "
+                    "default weights. This may increase memory usage and slightly "
+                    "reduce performance compared to native %s weights.",
+                    stage_label.capitalize(),
+                    model_id,
+                    variant,
+                    variant,
+                )
+                load_kwargs.pop("variant", None)
+                pipeline = pipeline_cls.from_pretrained(model_id, **load_kwargs)
+            else:
+                raise
+        except OSError as exc:  # pragma: no cover - passthrough for clearer error message
+            raise RuntimeError(
+                "Failed to load Stable Diffusion pipeline. "
+                "Check that the model ID is correct and that you have the "
+                "necessary permissions. You can override the model via the "
+                "TEXT2IMAGE_MODEL_ID environment variable."
+            ) from exc
+
+        pipeline = pipeline.to(device)
+
+        if hasattr(pipeline, "safety_checker"):
+            pipeline.safety_checker = _disable_safety_checker
+
+        return pipeline
+
+    base_pipeline = _instantiate_pipeline(
+        config.model_id, config.pipeline_cls, config.variant, stage_label="base"
+    )
+
+    refiner_pipeline: Optional[DiffusionPipeline] = None
+    if config.refiner_model_id and config.refiner_cls:
+        refiner_pipeline = _instantiate_pipeline(
+            config.refiner_model_id,
+            config.refiner_cls,
+            config.refiner_variant,
+            stage_label="refiner",
         )
 
-        if should_retry_without_variant:
-            logger.warning(
-                "Model %s does not provide the '%s' variant; falling back to default "
-                "weights. This may increase memory usage and slightly reduce "
-                "performance compared to native %s weights.",
-                model_id,
-                config.variant,
-                config.variant,
-            )
-            load_kwargs.pop("variant", None)
-            pipeline = config.pipeline_cls.from_pretrained(model_id, **load_kwargs)
-        else:
-            raise
-    except OSError as exc:  # pragma: no cover - passthrough for clearer error message
-        raise RuntimeError(
-            "Failed to load Stable Diffusion pipeline. "
-            "Check that the model ID is correct and that you have the "
-            "necessary permissions. You can override the model via the "
-            "TEXT2IMAGE_MODEL_ID environment variable."
-        ) from exc
-
-    # Move the pipeline to the appropriate device (GPU when available).
-    pipeline = pipeline.to(device)
-
-    # Disable the default NSFW safety checker so the pipeline returns images
-    # unfiltered. Some pipelines expose ``None`` when no checker exists, hence
-    # the attribute guard.
-    if hasattr(pipeline, "safety_checker"):
-        pipeline.safety_checker = _disable_safety_checker
-
-    _PIPELINE_CACHE[cache_key] = pipeline
-    return pipeline
+    loaded = LoadedPipelines(base=base_pipeline, refiner=refiner_pipeline)
+    _PIPELINE_CACHE[cache_key] = loaded
+    return config, loaded
 
 
 def _disable_safety_checker(images, **kwargs):
@@ -200,9 +234,31 @@ def generate_image(prompt: str, model: Optional[str] = None) -> Image.Image:
     """
 
     # The pipeline returns a ``PipelineOutput`` containing a list of PIL images.
-    pipeline = _load_pipeline(model)
-    output = pipeline(prompt)
-    return output.images[0]
+    config, pipelines = _load_pipeline(model)
+
+    base_pipeline = pipelines.base
+    refiner_pipeline = pipelines.refiner
+
+    if refiner_pipeline is None:
+        output = base_pipeline(prompt)
+        return output.images[0]
+
+    # When a refiner is available, run a two-stage SDXL workflow. The base
+    # pipeline handles the majority of denoising and produces a latent image
+    # that the refiner then sharpens and enhances.
+    high_noise_frac = config.refiner_high_noise_frac or 0.8
+
+    base_output = base_pipeline(
+        prompt=prompt,
+        output_type="latent",
+        denoising_end=high_noise_frac,
+    )
+    refined_output = refiner_pipeline(
+        prompt=prompt,
+        image=base_output.images,
+        denoising_start=high_noise_frac,
+    )
+    return refined_output.images[0]
 
 
 if __name__ == "__main__":
