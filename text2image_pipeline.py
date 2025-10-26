@@ -21,16 +21,24 @@ from typing import Dict, Optional, Tuple, Type
 from inspect import signature
 
 import torch
-from diffusers import (
-    DiffusionPipeline,
-    StableDiffusionPipeline,
-    StableDiffusionXLPipeline,
-    StableDiffusionXLRefinerPipeline,
-)
+from diffusers import DiffusionPipeline, StableDiffusionPipeline, StableDiffusionXLPipeline
+
+try:  # pragma: no cover - availability depends on installed diffusers version
+    from diffusers import StableDiffusionXLRefinerPipeline  # type: ignore
+except ImportError:  # diffusers<0.20 does not expose the SDXL refiner pipeline
+    StableDiffusionXLRefinerPipeline = None  # type: ignore
+    _HAS_SDXL_REFINER = False
+else:
+    _HAS_SDXL_REFINER = True
 from PIL import Image
 
 
 logger = logging.getLogger(__name__)
+
+if not _HAS_SDXL_REFINER:
+    logger.warning(
+        "StableDiffusionXLRefinerPipeline is unavailable; SDXL refiner workflow will be disabled."
+    )
 
 
 @dataclass(frozen=True)
@@ -65,10 +73,12 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
         model_id="stabilityai/stable-diffusion-xl-base-1.0",
         pipeline_cls=StableDiffusionXLPipeline,
         variant="fp16",
-        refiner_model_id="stabilityai/stable-diffusion-xl-refiner-1.0",
-        refiner_cls=StableDiffusionXLRefinerPipeline,
-        refiner_variant="fp16",
-        refiner_high_noise_frac=0.8,
+        refiner_model_id=(
+            "stabilityai/stable-diffusion-xl-refiner-1.0" if _HAS_SDXL_REFINER else None
+        ),
+        refiner_cls=StableDiffusionXLRefinerPipeline if _HAS_SDXL_REFINER else None,
+        refiner_variant="fp16" if _HAS_SDXL_REFINER else None,
+        refiner_high_noise_frac=0.8 if _HAS_SDXL_REFINER else None,
     ),
     "animagine-xl-3.0": ModelConfig(
         model_id="cagliostrolab/animagine-xl-3.0",
