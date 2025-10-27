@@ -50,6 +50,27 @@ Captions are saved alongside the input image unless an output path is specified.
 
 Follow these steps to adapt Stable Diffusion to your own images:
 
+### Normalise your dataset images (optional but recommended)
+
+Stable Diffusion XL works best when every training image shares the same
+dimensions. The repository now includes a helper that mirrors the recommended
+1024×1024 preprocessing pipeline—small images are upscaled with bicubic
+interpolation, reasonably sized photos receive a centered smart crop, and
+extreme aspect ratios fall back to reflect padding so no important content is
+lost.
+
+```bash
+python preprocess_images.py \
+    /path/to/raw/images \
+    --output-dir /path/to/processed/images \
+    --strategy auto  # crop unless the aspect ratio is extreme
+```
+
+The command preserves your folder structure and writes the processed assets to
+the destination directory (omit `--output-dir` to operate in place). Adjust
+`--strategy` to `crop` or `pad` if you want to force one behaviour, and use
+`--target-size` when you need a square other than 1024×1024.
+
 1. **Generate captions for the dataset** – point the helper at a directory that contains the raw JPEG/PNG files. The script uses the BLIP captioning model to create a `metadata.jsonl` manifest with prompts for every image.
 
    ```bash
