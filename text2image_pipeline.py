@@ -23,6 +23,7 @@ from inspect import signature
 import torch
 try:
     from diffusers import (
+        AutoencoderKL,
         DiffusionPipeline,
         StableDiffusionPipeline,
         StableDiffusionXLPipeline,
@@ -69,6 +70,8 @@ class ModelConfig:
     model_id: str
     pipeline_cls: Type[DiffusionPipeline]
     variant: Optional[str] = None
+    vae_model_id: Optional[str] = None
+    vae_variant: Optional[str] = None
     refiner_model_id: Optional[str] = None
     refiner_cls: Optional[Type[DiffusionPipeline]] = None
     refiner_variant: Optional[str] = None
@@ -77,10 +80,12 @@ class ModelConfig:
 
 @dataclass
 class LoadedPipelines:
-    """Container holding the primary pipeline and optional refiner."""
+    """Container holding the primary pipeline, optional refiner, and VAEs."""
 
     base: DiffusionPipeline
     refiner: Optional[DiffusionPipeline] = None
+    base_default_vae: Optional[AutoencoderKL] = None
+    custom_vae: Optional[AutoencoderKL] = None
 
 
 DEFAULT_MODEL_NAME = "stable-diffusion-xl-1.0"
@@ -94,6 +99,8 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
         model_id="stabilityai/stable-diffusion-xl-base-1.0",
         pipeline_cls=StableDiffusionXLPipeline,
         variant="fp16",
+        vae_model_id="madebyollin/sdxl-vae-fp16-fix",
+        vae_variant="fp16",
         refiner_model_id=(
             "stabilityai/stable-diffusion-xl-refiner-1.0"
             if _REFINER_PIPELINE_CLS is not None
@@ -113,6 +120,60 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
 AVAILABLE_MODELS = tuple(sorted(_MODEL_REGISTRY))
 
 _PIPELINE_CACHE: Dict[str, LoadedPipelines] = {}
+_VAE_CACHE: Dict[Tuple[str, Optional[str], str, str], AutoencoderKL] = {}
+
+
+def _load_vae(
+    model_id: str,
+    variant: Optional[str],
+    torch_dtype: Optional[torch.dtype],
+    device: str,
+) -> AutoencoderKL:
+    """Load (or retrieve from cache) an AutoencoderKL VAE."""
+
+    dtype_token = (
+        str(torch_dtype).split(".")[-1]
+        if torch_dtype is not None
+        else "default"
+    )
+    cache_key = (model_id, variant, dtype_token, device)
+
+    if cache_key in _VAE_CACHE:
+        return _VAE_CACHE[cache_key]
+
+    load_kwargs = {}
+    if torch_dtype is not None:
+        load_kwargs["torch_dtype"] = torch_dtype
+
+    if variant is not None and torch_dtype == torch.float16:
+        load_kwargs["variant"] = variant
+
+    try:
+        vae = AutoencoderKL.from_pretrained(model_id, **load_kwargs)
+    except ValueError as exc:
+        should_retry_without_variant = (
+            "variant" in load_kwargs
+            and variant is not None
+            and "variant=" in str(exc)
+        )
+
+        if should_retry_without_variant:
+            logger.warning(
+                "VAE model %s does not provide the '%s' variant; falling back to "
+                "default weights. This may increase memory usage and slightly "
+                "reduce performance compared to native %s weights.",
+                model_id,
+                variant,
+                variant,
+            )
+            load_kwargs.pop("variant", None)
+            vae = AutoencoderKL.from_pretrained(model_id, **load_kwargs)
+        else:
+            raise
+
+    vae = vae.to(device)
+    _VAE_CACHE[cache_key] = vae
+    return vae
 
 
 def _normalise_model_name(model_name: str) -> str:
@@ -220,6 +281,24 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
         config.model_id, config.pipeline_cls, config.variant, stage_label="base"
     )
 
+    base_default_vae: Optional[AutoencoderKL]
+    base_default_vae = getattr(base_pipeline, "vae", None)
+
+    custom_vae: Optional[AutoencoderKL] = None
+    if config.vae_model_id:
+        try:
+            custom_vae = _load_vae(
+                config.vae_model_id,
+                config.vae_variant,
+                torch_dtype,
+                device,
+            )
+        except OSError as exc:  # pragma: no cover - passthrough for clearer error message
+            raise RuntimeError(
+                "Failed to load the configured VAE weights. Check that the model ID "
+                "is correct and that you have the necessary permissions."
+            ) from exc
+
     refiner_pipeline: Optional[DiffusionPipeline] = None
     if config.refiner_model_id and config.refiner_cls:
         refiner_pipeline = _instantiate_pipeline(
@@ -229,9 +308,39 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
             stage_label="refiner",
         )
 
-    loaded = LoadedPipelines(base=base_pipeline, refiner=refiner_pipeline)
+    loaded = LoadedPipelines(
+        base=base_pipeline,
+        refiner=refiner_pipeline,
+        base_default_vae=base_default_vae,
+        custom_vae=custom_vae,
+    )
     _PIPELINE_CACHE[cache_key] = loaded
     return config, loaded
+
+
+def _configure_pipeline_vae(pipelines: LoadedPipelines, use_custom_vae: Optional[bool]) -> None:
+    """Attach the requested VAE to the cached base pipeline."""
+
+    base_pipeline = pipelines.base
+    target_vae: Optional[AutoencoderKL]
+
+    if use_custom_vae is True:
+        if pipelines.custom_vae is None:
+            raise ValueError(
+                "A custom VAE was requested, but the selected model does not "
+                "provide one."
+            )
+        target_vae = pipelines.custom_vae
+    elif use_custom_vae is False:
+        target_vae = pipelines.base_default_vae
+    else:
+        target_vae = pipelines.custom_vae or pipelines.base_default_vae
+
+    if target_vae is None:
+        return
+
+    if getattr(base_pipeline, "vae", None) is not target_vae:
+        base_pipeline.vae = target_vae
 
 
 def _disable_safety_checker(images, **kwargs):
@@ -264,6 +373,7 @@ def generate_image(
     prompt: str,
     model: Optional[str] = None,
     workflow: Optional[str] = None,
+    use_custom_vae: Optional[bool] = None,
 ) -> Image.Image:
     """Generate an image from a text prompt.
 
@@ -282,6 +392,12 @@ def generate_image(
         to skip any loaded refiner, and ``"base+refiner"`` to require a
         two-pass SDXL run. The comparison is case-insensitive.
 
+    use_custom_vae:
+        When ``True`` the loader forces attachment of any configured external
+        VAE (such as the SDXL FP16 fix). When ``False`` the pipeline reverts to
+        its default autoencoder. ``None`` (default) chooses the external VAE
+        when available and otherwise keeps the pipeline default.
+
     Returns
     -------
     PIL.Image.Image
@@ -290,6 +406,8 @@ def generate_image(
 
     # The pipeline returns a ``PipelineOutput`` containing a list of PIL images.
     config, pipelines = _load_pipeline(model)
+
+    _configure_pipeline_vae(pipelines, use_custom_vae)
 
     base_pipeline = pipelines.base
     refiner_pipeline = pipelines.refiner

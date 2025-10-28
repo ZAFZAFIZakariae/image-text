@@ -62,6 +62,25 @@ def parse_args() -> argparse.Namespace:
             "'base+refiner' requires the two-stage SDXL pass."
         ),
     )
+    parser.set_defaults(use_custom_vae=None)
+    parser.add_argument(
+        "--use-custom-vae",
+        dest="use_custom_vae",
+        action="store_true",
+        help=(
+            "Force the pipeline to attach any configured external VAE. This "
+            "enables the full SDXL base+refiner+VAE stack when available."
+        ),
+    )
+    parser.add_argument(
+        "--no-custom-vae",
+        dest="use_custom_vae",
+        action="store_false",
+        help=(
+            "Disable the configured external VAE and use the pipeline's "
+            "default autoencoder."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -77,7 +96,12 @@ def main() -> None:
     selected_model = model_choice or DEFAULT_MODEL_NAME
     print(f"Using model: {selected_model}")
 
-    image = generate_image(prompt, model=model_choice, workflow=args.workflow)
+    image = generate_image(
+        prompt,
+        model=model_choice,
+        workflow=args.workflow,
+        use_custom_vae=args.use_custom_vae,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path)
