@@ -259,10 +259,13 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
                 device,
             )
         except OSError as exc:  # pragma: no cover - passthrough for clearer error message
-            raise RuntimeError(
-                "Failed to load the configured VAE weights. Check that the model ID "
-                "is correct and that you have the necessary permissions."
-            ) from exc
+            logger.warning(
+                "Failed to load custom VAE '%s': %s. Falling back to the pipeline's "
+                "default autoencoder.",
+                config.vae_model_id,
+                exc,
+            )
+            custom_vae = None
 
     refiner_pipeline: Optional[DiffusionPipeline] = None
     if config.refiner_model_id and config.refiner_cls:
