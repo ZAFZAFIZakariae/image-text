@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
 from inspect import signature
 
@@ -90,6 +90,26 @@ class LoadedPipelines:
 
 DEFAULT_MODEL_NAME = "stable-diffusion-xl-1.0"
 
+_REALVISXL_V4_CONFIG = ModelConfig(
+    model_id="SG161222/RealVisXL_V4.0",
+    pipeline_cls=StableDiffusionXLPipeline,
+)
+
+_REALVISXL_V5_CONFIG = ModelConfig(
+    model_id="SG161222/RealVisXL_V5.0",
+    pipeline_cls=StableDiffusionXLPipeline,
+)
+
+_JUGGERNAUTXL_V8_CONFIG = ModelConfig(
+    model_id="RunDiffusion/Juggernaut-XL-v8",
+    pipeline_cls=StableDiffusionXLPipeline,
+)
+
+_JUGGERNAUTXL_V10_NSFW_CONFIG = ModelConfig(
+    model_id="RunDiffusion/Juggernaut-XL-v10-nsfw",
+    pipeline_cls=StableDiffusionXLPipeline,
+)
+
 _MODEL_REGISTRY: Dict[str, ModelConfig] = {
     "stable-diffusion-v1-5": ModelConfig(
         model_id="runwayml/stable-diffusion-v1-5",
@@ -115,6 +135,22 @@ _MODEL_REGISTRY: Dict[str, ModelConfig] = {
         pipeline_cls=StableDiffusionXLPipeline,
         variant="fp16",
     ),
+    "realvisxl": _REALVISXL_V4_CONFIG,
+    "realvisxl-v4": _REALVISXL_V4_CONFIG,
+    "realvisxl-v4.0": _REALVISXL_V4_CONFIG,
+    "realvis-xl": _REALVISXL_V4_CONFIG,
+    "realvis-xl-4": _REALVISXL_V4_CONFIG,
+    "realvis-xl-4.0": _REALVISXL_V4_CONFIG,
+    "realvisxl-v5": _REALVISXL_V5_CONFIG,
+    "realvisxl-v5.0": _REALVISXL_V5_CONFIG,
+    "realvis-xl-5": _REALVISXL_V5_CONFIG,
+    "realvis-xl-5.0": _REALVISXL_V5_CONFIG,
+    "juggernautxl": _JUGGERNAUTXL_V8_CONFIG,
+    "juggernaut-xl": _JUGGERNAUTXL_V8_CONFIG,
+    "juggernautxl-v8": _JUGGERNAUTXL_V8_CONFIG,
+    "juggernaut-xl-v8": _JUGGERNAUTXL_V8_CONFIG,
+    "juggernautxl-v10-nsfw": _JUGGERNAUTXL_V10_NSFW_CONFIG,
+    "juggernaut-xl-v10-nsfw": _JUGGERNAUTXL_V10_NSFW_CONFIG,
 }
 
 AVAILABLE_MODELS = tuple(sorted(_MODEL_REGISTRY))
@@ -369,11 +405,31 @@ _VALID_WORKFLOWS = {
 WORKFLOW_CHOICES = tuple(sorted(_VALID_WORKFLOWS))
 
 
+def _filter_kwargs_for_pipeline(
+    pipeline: DiffusionPipeline, extra_kwargs: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Return only the keyword arguments accepted by ``pipeline``."""
+
+    call_signature = signature(pipeline.__call__)
+    has_var_kwargs = any(
+        parameter.kind == parameter.VAR_KEYWORD
+        for parameter in call_signature.parameters.values()
+    )
+
+    if has_var_kwargs:
+        return dict(extra_kwargs)
+
+    valid_params = set(call_signature.parameters)
+    return {k: v for k, v in extra_kwargs.items() if k in valid_params}
+
+
 def generate_image(
     prompt: str,
     model: Optional[str] = None,
     workflow: Optional[str] = None,
     use_custom_vae: Optional[bool] = None,
+    refiner_start: Optional[float] = None,
+    **pipeline_kwargs: Any,
 ) -> Image.Image:
     """Generate an image from a text prompt.
 
@@ -397,6 +453,18 @@ def generate_image(
         VAE (such as the SDXL FP16 fix). When ``False`` the pipeline reverts to
         its default autoencoder. ``None`` (default) chooses the external VAE
         when available and otherwise keeps the pipeline default.
+
+    refiner_start:
+        Optional fraction in the ``[0, 1]`` range indicating when the SDXL
+        refiner should take over the denoising process. When not provided, the
+        value defined by the model configuration is used (default: ``0.8`` for
+        the bundled SDXL weights).
+
+    **pipeline_kwargs:
+        Additional keyword arguments forwarded to the underlying diffusers
+        pipelines. This exposes the full set of Stable Diffusion parameters,
+        such as ``negative_prompt``, ``guidance_scale``, ``num_inference_steps``,
+        ``width``/``height``, callbacks, or custom generators.
 
     Returns
     -------
@@ -433,24 +501,51 @@ def generate_image(
         or (selected_workflow == _WORKFLOW_AUTO and refiner_pipeline is not None)
     )
 
+    extra_kwargs: Dict[str, Any] = dict(pipeline_kwargs)
+    if "prompt" in extra_kwargs:
+        logger.warning(
+            "Ignoring 'prompt' specified via pipeline keyword arguments; the "
+            "value provided to generate_image() is always used instead."
+        )
+        extra_kwargs.pop("prompt", None)
+
     if not should_use_refiner:
-        output = base_pipeline(prompt)
+        call_kwargs = _filter_kwargs_for_pipeline(base_pipeline, extra_kwargs)
+        output = base_pipeline(prompt=prompt, **call_kwargs)
         return output.images[0]
 
     # When a refiner is available, run a two-stage SDXL workflow. The base
     # pipeline handles the majority of denoising and produces a latent image
     # that the refiner then sharpens and enhances.
-    high_noise_frac = config.refiner_high_noise_frac or 0.8
+    high_noise_frac = (
+        refiner_start
+        if refiner_start is not None
+        else config.refiner_high_noise_frac or 0.8
+    )
+
+    base_kwargs = _filter_kwargs_for_pipeline(base_pipeline, extra_kwargs)
+    base_kwargs.pop("output_type", None)
+    base_denoising_end = base_kwargs.pop("denoising_end", high_noise_frac)
 
     base_output = base_pipeline(
         prompt=prompt,
         output_type="latent",
-        denoising_end=high_noise_frac,
+        denoising_end=base_denoising_end,
+        **base_kwargs,
     )
+
+    assert refiner_pipeline is not None  # Narrow type for static checkers
+    refiner_kwargs = _filter_kwargs_for_pipeline(refiner_pipeline, extra_kwargs)
+    refiner_kwargs.pop("image", None)
+    refiner_denoising_start = refiner_kwargs.pop(
+        "denoising_start", base_denoising_end
+    )
+
     refined_output = refiner_pipeline(
         prompt=prompt,
         image=base_output.images,
-        denoising_start=high_noise_frac,
+        denoising_start=refiner_denoising_start,
+        **refiner_kwargs,
     )
     return refined_output.images[0]
 
