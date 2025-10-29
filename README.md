@@ -27,13 +27,26 @@ python run_text2image.py \
     --workflow base-only
 ```
 
-The ``--model`` flag accepts aliases for the bundled configurations (``stable-diffusion-xl-1.0`` and ``animagine-xl-3.0``) as well as any Hugging Face model identifier. Leaving the option blank uses Stable Diffusion XL 1.0. Regardless of the model, pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
+The ``--model`` flag accepts aliases for the bundled configurations (``stable-diffusion-xl-1.0``, ``animagine-xl-3.0``, ``realvis-xl-4.0``/``realvisxl-v4``, ``realvis-xl-5.0``/``realvisxl-v5`` and ``juggernaut-xl-v8``/``juggernautxl`` plus ``juggernaut-xl-v10-nsfw``) as well as any Hugging Face model identifier. Leaving the option blank uses Stable Diffusion XL 1.0. Regardless of the model, pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
 
 Control the diffusion pass with ``--workflow``:
 
 - ``auto`` (default) runs the refiner whenever the selected model includes one. SDXL users should ensure the `stabilityai/stable-diffusion-xl-refiner-1.0` checkpoint is accessible (log in with `huggingface_hub` if required) so the workflow can download the weights on first use.
 - ``base-only`` forces a single pass through the base pipeline.
 - ``base+refiner`` requires the two-stage SDXL workflow and errors if a refiner is unavailable.
+
+#### Advanced SDXL and Diffusers parameters
+
+The CLI exposes the most common Stable Diffusion XL settings directly:
+
+- ``--negative-prompt`` to suppress unwanted concepts.
+- ``--num-inference-steps`` to control the denoising iterations.
+- ``--guidance-scale`` to adjust classifier-free guidance strength.
+- ``--width`` / ``--height`` to override the generated resolution.
+- ``--seed`` to produce deterministic results when paired with a fixed prompt.
+- ``--refiner-start`` to choose when the SDXL refiner takes over in a two-stage run.
+
+Any additional keyword arguments supported by the underlying diffusers pipeline can be forwarded with ``--pipeline-arg KEY=VALUE``. Repeat the flag to send multiple values (for example, ``--pipeline-arg scheduler=EulerAncestralDiscreteScheduler --pipeline-arg clip_skip=2``). Values are parsed with ``ast.literal_eval`` when possible, so numbers, lists, and booleans can be passed without surrounding quotes.
 
 ### Image Captioning
 
