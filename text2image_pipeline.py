@@ -49,6 +49,14 @@ from PIL import Image
 
 from text2image_models import ModelConfig, build_model_registry
 
+_VAE_LOAD_ERROR_TYPES: Tuple[Type[BaseException], ...] = (OSError, RuntimeError)
+try:  # pragma: no cover - optional dependency in minimal environments
+    from huggingface_hub.errors import HfHubHTTPError  # type: ignore
+except Exception:  # pragma: no cover - huggingface_hub may be absent in tests
+    HfHubHTTPError = None  # type: ignore[assignment]
+else:  # pragma: no cover - extends the handled exception list when available
+    _VAE_LOAD_ERROR_TYPES = _VAE_LOAD_ERROR_TYPES + (HfHubHTTPError,)
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +82,12 @@ class LoadedPipelines:
     refiner: Optional[DiffusionPipeline] = None
     base_default_vae: Optional[AutoencoderKL] = None
     custom_vae: Optional[AutoencoderKL] = None
+    vae_model_id: Optional[str] = None
+    vae_variant: Optional[str] = None
+    torch_dtype: Optional[torch.dtype] = None
+    device: str = "cpu"
+    custom_vae_failed: bool = False
+    custom_vae_error: Optional[BaseException] = None
 
 
 DEFAULT_MODEL_NAME, _MODEL_REGISTRY = build_model_registry(_REFINER_PIPELINE_CLS)
@@ -249,24 +263,6 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
     base_default_vae: Optional[AutoencoderKL]
     base_default_vae = getattr(base_pipeline, "vae", None)
 
-    custom_vae: Optional[AutoencoderKL] = None
-    if config.vae_model_id:
-        try:
-            custom_vae = _load_vae(
-                config.vae_model_id,
-                config.vae_variant,
-                torch_dtype,
-                device,
-            )
-        except OSError as exc:  # pragma: no cover - passthrough for clearer error message
-            logger.warning(
-                "Failed to load custom VAE '%s': %s. Falling back to the pipeline's "
-                "default autoencoder.",
-                config.vae_model_id,
-                exc,
-            )
-            custom_vae = None
-
     refiner_pipeline: Optional[DiffusionPipeline] = None
     if config.refiner_model_id and config.refiner_cls:
         refiner_pipeline = _instantiate_pipeline(
@@ -280,7 +276,11 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
         base=base_pipeline,
         refiner=refiner_pipeline,
         base_default_vae=base_default_vae,
-        custom_vae=custom_vae,
+        custom_vae=None,
+        vae_model_id=config.vae_model_id,
+        vae_variant=config.vae_variant,
+        torch_dtype=torch_dtype,
+        device=device,
     )
     _PIPELINE_CACHE[cache_key] = loaded
     return config, loaded
@@ -292,8 +292,45 @@ def _configure_pipeline_vae(pipelines: LoadedPipelines, use_custom_vae: Optional
     base_pipeline = pipelines.base
     target_vae: Optional[AutoencoderKL]
 
+    def _ensure_custom_vae_loaded(force_retry: bool = False) -> None:
+        if force_retry:
+            pipelines.custom_vae_failed = False
+            pipelines.custom_vae_error = None
+
+        if (
+            pipelines.custom_vae is not None
+            or pipelines.vae_model_id is None
+            or pipelines.custom_vae_failed
+        ):
+            return
+
+        try:
+            pipelines.custom_vae = _load_vae(
+                pipelines.vae_model_id,
+                pipelines.vae_variant,
+                pipelines.torch_dtype,
+                pipelines.device,
+            )
+        except _VAE_LOAD_ERROR_TYPES as exc:  # pragma: no cover - clearer warning for missing VAEs
+            pipelines.custom_vae_failed = True
+            pipelines.custom_vae_error = exc
+            logger.warning(
+                "Failed to load custom VAE '%s': %s. Falling back to the pipeline's "
+                "default autoencoder.",
+                pipelines.vae_model_id,
+                exc,
+            )
+            pipelines.custom_vae = None
+
     if use_custom_vae is True:
+        _ensure_custom_vae_loaded(force_retry=True)
         if pipelines.custom_vae is None:
+            if pipelines.custom_vae_error is not None:
+                raise RuntimeError(
+                    "Failed to load the requested custom VAE weights. Check that "
+                    "the model ID is correct and that you have the necessary "
+                    "permissions."
+                ) from pipelines.custom_vae_error
             raise ValueError(
                 "A custom VAE was requested, but the selected model does not "
                 "provide one."
@@ -302,6 +339,7 @@ def _configure_pipeline_vae(pipelines: LoadedPipelines, use_custom_vae: Optional
     elif use_custom_vae is False:
         target_vae = pipelines.base_default_vae
     else:
+        _ensure_custom_vae_loaded()
         target_vae = pipelines.custom_vae or pipelines.base_default_vae
 
     if target_vae is None:
@@ -408,8 +446,6 @@ def generate_image(
     # The pipeline returns a ``PipelineOutput`` containing a list of PIL images.
     config, pipelines = _load_pipeline(model)
 
-    _configure_pipeline_vae(pipelines, use_custom_vae)
-
     base_pipeline = pipelines.base
     refiner_pipeline = pipelines.refiner
 
@@ -433,6 +469,12 @@ def generate_image(
         selected_workflow == _WORKFLOW_BASE_REFINER
         or (selected_workflow == _WORKFLOW_AUTO and refiner_pipeline is not None)
     )
+
+    effective_use_custom_vae = use_custom_vae
+    if effective_use_custom_vae is None and selected_workflow == _WORKFLOW_BASE_ONLY:
+        effective_use_custom_vae = False
+
+    _configure_pipeline_vae(pipelines, effective_use_custom_vae)
 
     extra_kwargs: Dict[str, Any] = dict(pipeline_kwargs)
     if "prompt" in extra_kwargs:
