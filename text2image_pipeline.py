@@ -2,19 +2,25 @@
 
 This module exposes a :func:`generate_image` helper that wraps models from the
 `diffusers <https://github.com/huggingface/diffusers>`_ library.  The module
-now ships with built-in configurations for Stable Diffusion XL 1.0 and
-Animagine XL 3.0 while still allowing callers to supply any other Hugging Face
-model identifier.  Pipelines are cached per model so the heavy weights are only
-loaded once per process, and the built-in safety checker is disabled to avoid
-automatic censoring.
+now ships with dedicated configurations for:
+
+* Stable Diffusion XL 1.0 with optional refiner and external VAE support.
+* SG161222's RealVis XL V5.0, including its companion VAE without a separate
+  refiner stage.
+* RunDiffusion's Juggernaut XL v10 checkpoint.
+* CagliostroLab's Animagine XL 4.0 model.
+
+Pipelines are cached per model so the heavy weights are only loaded once per
+process, and the built-in safety checker is disabled to avoid automatic
+censoring.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Type
 
@@ -22,12 +28,7 @@ from inspect import signature
 
 import torch
 try:
-    from diffusers import (
-        AutoencoderKL,
-        DiffusionPipeline,
-        StableDiffusionPipeline,
-        StableDiffusionXLPipeline,
-    )
+    from diffusers import AutoencoderKL, DiffusionPipeline
 except ImportError:  # pragma: no cover - diffusers must be installed
     raise
 
@@ -46,10 +47,12 @@ except ImportError:  # pragma: no cover - silently fall back to the img2img clas
     StableDiffusionXLRefinerPipeline = None  # type: ignore[assignment]
 from PIL import Image
 
+from text2image_models import ModelConfig, build_model_registry
+
 
 logger = logging.getLogger(__name__)
 
-_REFINER_PIPELINE_CLS = None
+_REFINER_PIPELINE_CLS: Optional[Type[DiffusionPipeline]] = None
 if StableDiffusionXLImg2ImgPipeline is not None:
     _REFINER_PIPELINE_CLS = StableDiffusionXLImg2ImgPipeline
 elif StableDiffusionXLRefinerPipeline is not None:
@@ -63,21 +66,6 @@ if _REFINER_PIPELINE_CLS is None:  # pragma: no cover - logging only
         "two-stage `base+refiner` workflow."
     )
 
-@dataclass(frozen=True)
-class ModelConfig:
-    """Configuration describing how to construct a diffusion pipeline."""
-
-    model_id: str
-    pipeline_cls: Type[DiffusionPipeline]
-    variant: Optional[str] = None
-    vae_model_id: Optional[str] = None
-    vae_variant: Optional[str] = None
-    refiner_model_id: Optional[str] = None
-    refiner_cls: Optional[Type[DiffusionPipeline]] = None
-    refiner_variant: Optional[str] = None
-    refiner_high_noise_frac: Optional[float] = None
-
-
 @dataclass
 class LoadedPipelines:
     """Container holding the primary pipeline, optional refiner, and VAEs."""
@@ -88,70 +76,7 @@ class LoadedPipelines:
     custom_vae: Optional[AutoencoderKL] = None
 
 
-DEFAULT_MODEL_NAME = "stable-diffusion-xl-1.0"
-
-_REALVISXL_V4_CONFIG = ModelConfig(
-    model_id="SG161222/RealVisXL_V4.0",
-    pipeline_cls=StableDiffusionXLPipeline,
-)
-
-_REALVISXL_V5_CONFIG = ModelConfig(
-    model_id="SG161222/RealVisXL_V5.0",
-    pipeline_cls=StableDiffusionXLPipeline,
-)
-
-_JUGGERNAUTXL_V8_CONFIG = ModelConfig(
-    model_id="RunDiffusion/Juggernaut-XL-v8",
-    pipeline_cls=StableDiffusionXLPipeline,
-)
-
-_JUGGERNAUTXL_V10_NSFW_CONFIG = ModelConfig(
-    model_id="RunDiffusion/Juggernaut-XL-v10-nsfw",
-    pipeline_cls=StableDiffusionXLPipeline,
-)
-
-_MODEL_REGISTRY: Dict[str, ModelConfig] = {
-    "stable-diffusion-v1-5": ModelConfig(
-        model_id="runwayml/stable-diffusion-v1-5",
-        pipeline_cls=StableDiffusionPipeline,
-    ),
-    "stable-diffusion-xl-1.0": ModelConfig(
-        model_id="stabilityai/stable-diffusion-xl-base-1.0",
-        pipeline_cls=StableDiffusionXLPipeline,
-        variant="fp16",
-        vae_model_id="madebyollin/sdxl-vae-fp16-fix",
-        vae_variant="fp16",
-        refiner_model_id=(
-            "stabilityai/stable-diffusion-xl-refiner-1.0"
-            if _REFINER_PIPELINE_CLS is not None
-            else None
-        ),
-        refiner_cls=_REFINER_PIPELINE_CLS,
-        refiner_variant="fp16" if _REFINER_PIPELINE_CLS is not None else None,
-        refiner_high_noise_frac=0.8,
-    ),
-    "animagine-xl-3.0": ModelConfig(
-        model_id="cagliostrolab/animagine-xl-3.0",
-        pipeline_cls=StableDiffusionXLPipeline,
-        variant="fp16",
-    ),
-    "realvisxl": _REALVISXL_V4_CONFIG,
-    "realvisxl-v4": _REALVISXL_V4_CONFIG,
-    "realvisxl-v4.0": _REALVISXL_V4_CONFIG,
-    "realvis-xl": _REALVISXL_V4_CONFIG,
-    "realvis-xl-4": _REALVISXL_V4_CONFIG,
-    "realvis-xl-4.0": _REALVISXL_V4_CONFIG,
-    "realvisxl-v5": _REALVISXL_V5_CONFIG,
-    "realvisxl-v5.0": _REALVISXL_V5_CONFIG,
-    "realvis-xl-5": _REALVISXL_V5_CONFIG,
-    "realvis-xl-5.0": _REALVISXL_V5_CONFIG,
-    "juggernautxl": _JUGGERNAUTXL_V8_CONFIG,
-    "juggernaut-xl": _JUGGERNAUTXL_V8_CONFIG,
-    "juggernautxl-v8": _JUGGERNAUTXL_V8_CONFIG,
-    "juggernaut-xl-v8": _JUGGERNAUTXL_V8_CONFIG,
-    "juggernautxl-v10-nsfw": _JUGGERNAUTXL_V10_NSFW_CONFIG,
-    "juggernaut-xl-v10-nsfw": _JUGGERNAUTXL_V10_NSFW_CONFIG,
-}
+DEFAULT_MODEL_NAME, _MODEL_REGISTRY = build_model_registry(_REFINER_PIPELINE_CLS)
 
 AVAILABLE_MODELS = tuple(sorted(_MODEL_REGISTRY))
 
@@ -215,11 +140,6 @@ def _load_vae(
 def _normalise_model_name(model_name: str) -> str:
     """Normalise a model alias for dictionary lookup."""
 
-    # Hugging Face model identifiers include `/`. Treat those as canonical IDs
-    # and return them unchanged so custom checkpoints are supported.
-    if "/" in model_name:
-        return model_name
-
     normalised = model_name.strip().lower()
     # Replace spaces with dashes and drop parentheses so names like
     # "Stable Diffusion XL (1.0)" resolve to the registered alias.
@@ -237,9 +157,11 @@ def _resolve_model(model_name: Optional[str]) -> Tuple[str, ModelConfig]:
     if normalised in _MODEL_REGISTRY:
         return normalised, _MODEL_REGISTRY[normalised]
 
-    # Fall back to treating the provided value as a direct Hugging Face model ID.
-    # Use the Stable Diffusion v1.5 pipeline class as a sensible default.
-    return requested, ModelConfig(model_id=requested, pipeline_cls=StableDiffusionPipeline)
+    available = ", ".join(sorted(_MODEL_REGISTRY))
+    raise ValueError(
+        "Unknown model alias requested. Supported values are: "
+        f"{available}."
+    )
 
 
 def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, LoadedPipelines]:
@@ -265,12 +187,19 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
         stage_label: str,
     ) -> DiffusionPipeline:
         load_kwargs = {}
+        pretrained_signature = signature(pipeline_cls.from_pretrained)
+
         if torch_dtype is not None:
-            pretrained_signature = signature(pipeline_cls.from_pretrained)
             if "dtype" in pretrained_signature.parameters:
                 load_kwargs["dtype"] = torch_dtype
             else:
                 load_kwargs["torch_dtype"] = torch_dtype
+
+        if "requires_safety_checker" in pretrained_signature.parameters:
+            load_kwargs["requires_safety_checker"] = False
+
+        if "safety_checker" in pretrained_signature.parameters:
+            load_kwargs.setdefault("safety_checker", None)
 
         if variant is not None and torch_dtype == torch.float16:
             load_kwargs.setdefault("variant", variant)
@@ -438,9 +367,10 @@ def generate_image(
     prompt:
         The text description to feed into Stable Diffusion.
     model:
-        Optional alias or Hugging Face model identifier designating which
-        diffusion pipeline to run. When omitted the default configured model
-        (Stable Diffusion XL 1.0) is used.
+        Optional alias designating which diffusion pipeline to run. When
+        omitted the default configured model (Stable Diffusion XL 1.0) is used.
+        Providing an unknown alias raises ``ValueError`` with the supported
+        choices.
 
     workflow:
         Controls which parts of the diffusion pipeline should execute. The

@@ -95,8 +95,8 @@ def parse_args() -> argparse.Namespace:
         "-m",
         default=None,
         help=(
-            "Model alias or Hugging Face model ID to use for image generation. "
-            f"Known aliases: {', '.join(AVAILABLE_MODELS)}"
+            "Model alias to use for image generation. Supported aliases: "
+            f"{', '.join(AVAILABLE_MODELS)}"
         ),
     )
     parser.add_argument(

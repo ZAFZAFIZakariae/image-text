@@ -23,11 +23,18 @@ Use the provided script to generate images from prompts:
 python run_text2image.py \
     --prompt "A futuristic cityscape at sunset" \
     --output outputs/text2image.png \
-    --model "Animagine XL 3.0" \
+    --model "Animagine XL 4.0" \
     --workflow base-only
 ```
 
-The ``--model`` flag accepts aliases for the bundled configurations (``stable-diffusion-xl-1.0``, ``animagine-xl-3.0``, ``realvis-xl-4.0``/``realvisxl-v4``, ``realvis-xl-5.0``/``realvisxl-v5`` and ``juggernaut-xl-v8``/``juggernautxl`` plus ``juggernaut-xl-v10-nsfw``) as well as any Hugging Face model identifier. Leaving the option blank uses Stable Diffusion XL 1.0. Regardless of the model, pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
+The ``--model`` flag accepts aliases for the bundled configurations only. The integrated registry now focuses on four SDXL-era checkpoints:
+
+- ``stable-diffusion-xl-1.0`` / ``sdxl`` – base weights with optional refiner and fp16 VAE fix.
+- ``realvisxl-v5.0`` / ``realvis-xl-5.0`` – RealVis XL V5.0 with its fused VAE (no refiner stage).
+- ``juggernautxl-v10`` / ``juggernaut-xl-v10`` – Juggernaut XL v10 with its bundled VAE.
+- ``animagine-xl-4.0`` / ``animagine-xl`` – Animagine XL 4.0 tuned for anime-style renders.
+
+Leaving ``--model`` blank uses Stable Diffusion XL 1.0. Pipelines are automatically moved to CUDA when available, which is strongly recommended for reasonable generation speed and quality.
 
 Control the diffusion pass with ``--workflow``:
 
@@ -152,8 +159,8 @@ below to get the SDXL base+refiner workflow running on a GPU runtime:
        --workflow base+refiner
    ```
 
-   To try a different checkpoint, pass `--model` with another alias or Hugging
-   Face model ID. To run SDXL without the refiner (which lowers memory usage on
+   To try a different bundled checkpoint, pass `--model` with one of the supported
+   aliases above. To run SDXL without the refiner (which lowers memory usage on
    smaller GPUs), switch the workflow flag:
 
    ```python
