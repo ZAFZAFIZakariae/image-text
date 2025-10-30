@@ -115,6 +115,102 @@ the destination directory (omit `--output-dir` to operate in place). Adjust
 
    The script saves checkpoints every `--save-interval` updates and resumes automatically when `--resume` is supplied. Increase `--epochs` and adjust the learning rate, batch size, and gradient accumulation to match your hardware.
 
+### Fine-tuning RealVis XL 5.0 with LyCORIS (LoCon + DoRA)
+
+You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base weights with LyCORIS (LoCon + DoRA) adapters using the Kohya trainer. The commands are designed for a fresh Google Colab session with a GPU runtime.
+
+1. **Setup (Colab)** – install the training dependencies and LyCORIS extension packages:
+
+   ```bash
+   pip install -q accelerate bitsandbytes==0.43.3 xformers==0.0.27.post2 triton==3.0.0 \
+     datasets==2.19.1 peft==0.11.1 einops==0.8.0 pillow==10.3.0 \
+     safetensors==0.4.3 transformers==4.44.2 lycoris-lora==2.3.2.dev6 \
+     sentencepiece==0.2.0
+   pip install -q git+https://github.com/bmaltais/kohya_ss.git@master
+   ```
+
+   Use a T4 or L4 GPU runtime and start from a clean session to avoid conflicts with cached wheels.
+
+2. **Paths & basics** – configure the RealVis checkpoint, dataset directory, and output path for the trained adapters:
+
+   ```bash
+   BASE_MODEL="/content/realvisxl-v5.safetensors"   # put your RealVis XL v5 here
+   DATA_DIR="/content/my60k"                         # images + per-image .txt captions
+   OUT_DIR="/content/output_loras"
+
+   mkdir -p "$OUT_DIR"
+   ```
+
+   Arrange the dataset so each image has a matching caption file (for example `img00001.jpg` and `img00001.txt`) inside `DATA_DIR`. If your captions are stored in a single file, run a caption splitter to generate one `.txt` file per image before training.
+
+3. **One-pass LyCORIS (LoCon + DoRA) training** – launch the Kohya trainer with the preset that matches your GPU memory budget. The configuration below covers the 60k-image run recommended by the user:
+
+   **L4 (24GB) – better throughput**
+
+   ```bash
+   python -u /usr/local/lib/python3.10/dist-packages/kohya_ss/train_network.py \
+     --network_module=lycoris.kohya \
+     --algo=locon_dora \
+     --network_dim=192 --network_alpha=96 --lora_dropout=0.05 \
+     --pretrained_model_name_or_path="$BASE_MODEL" \
+     --train_data_dir="$DATA_DIR" --caption_extension=".txt" \
+     --resolution=1024 --min_bucket_reso=640 --max_bucket_reso=1024 --bucket_reso_steps=64 \
+     --output_dir="$OUT_DIR" --output_name="realvisxl_locon_dora_full60k" \
+     --learning_rate=1e-4 --text_encoder_lr=5e-6 \
+     --optimizer_type=adamw8bit --weight_decay=0.01 --max_grad_norm=1.0 \
+     --lr_scheduler=cosine --lr_warmup_ratio=0.05 \
+     --train_unet --train_text_encoder \
+     --network_train_unet_only=0 \
+     --mixed_precision=bf16 --gradient_checkpointing \
+     --min_snr_gamma=5.0 --noise_offset=0.02 \
+     --max_data_loader_n_workers=8 --persistent_data_loader_workers \
+     --cache_latents_to_disk \
+     --save_every_n_steps=1000 --save_model_as=safetensors \
+     --log_prefix="L4_full60k" \
+     --max_train_steps=20000 \
+     --train_batch_size=2 --gradient_accumulation_steps=4
+   ```
+
+   **T4 (16GB) – tighter memory (smaller batch & more accumulation)**
+
+   ```bash
+   python -u /usr/local/lib/python3.10/dist-packages/kohya_ss/train_network.py \
+     --network_module=lycoris.kohya \
+     --algo=locon_dora \
+     --network_dim=192 --network_alpha=96 --lora_dropout=0.05 \
+     --pretrained_model_name_or_path="$BASE_MODEL" \
+     --train_data_dir="$DATA_DIR" --caption_extension=".txt" \
+     --resolution=1024 --min_bucket_reso=640 --max_bucket_reso=1024 --bucket_reso_steps=64 \
+     --output_dir="$OUT_DIR" --output_name="realvisxl_locon_dora_full60k" \
+     --learning_rate=1e-4 --text_encoder_lr=5e-6 \
+     --optimizer_type=adamw8bit --weight_decay=0.01 --max_grad_norm=1.0 \
+     --lr_scheduler=cosine --lr_warmup_ratio=0.05 \
+     --train_unet --train_text_encoder \
+     --network_train_unet_only=0 \
+     --mixed_precision=bf16 --gradient_checkpointing \
+     --min_snr_gamma=5.0 --noise_offset=0.02 \
+     --max_data_loader_n_workers=6 --persistent_data_loader_workers \
+     --cache_latents_to_disk \
+     --save_every_n_steps=1000 --save_model_as=safetensors \
+     --log_prefix="T4_full60k" \
+     --max_train_steps=20000 \
+     --train_batch_size=1 --gradient_accumulation_steps=8
+   ```
+
+   `--cache_latents_to_disk` keeps long runs stable on Colab. Monitor the quality of intermediate checkpoints (saved every 1,000 steps) and stop early if your results plateau—many 60k-image runs converge between 16k and 24k steps. Keep both EMA and non-EMA outputs if you plan to perform a full fine-tune later.
+
+If you prefer to store the configuration locally and trigger the same training command from this repository, use the helper script:
+
+```bash
+python train_realvis_locon_dora.py \
+    --base-model /content/realvisxl-v5.safetensors \
+    --data-dir /content/my60k \
+    --output-dir /content/output_loras \
+    --preset L4
+```
+
+Swap `--preset` to `T4` for the lower-memory schedule or add overrides such as `--max-train-steps 24000` or `--train-batch-size 1`. Pass `--dry-run` to print the composed `kohya_ss.train_network` invocation without launching it.
+
 ## Running on Google Colab
 
 The repo runs well inside a single Colab notebook cell sequence. Use the steps
