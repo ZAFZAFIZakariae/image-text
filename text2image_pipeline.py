@@ -26,6 +26,8 @@ from typing import Any, Dict, Optional, Tuple, Type
 
 from inspect import signature
 
+from copy import deepcopy
+
 import torch
 try:
     from diffusers import AutoencoderKL, DiffusionPipeline
@@ -88,6 +90,9 @@ class LoadedPipelines:
     device: str = "cpu"
     custom_vae_failed: bool = False
     custom_vae_error: Optional[BaseException] = None
+    base_default_scheduler_cls: Optional[Type[Any]] = None
+    base_default_scheduler_config: Optional[Dict[str, Any]] = None
+    base_scheduler_mode: str = "configured"
 
 
 DEFAULT_MODEL_NAME, _MODEL_REGISTRY = build_model_registry(_REFINER_PIPELINE_CLS)
@@ -260,8 +265,18 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
         config.model_id, config.pipeline_cls, config.variant, stage_label="base"
     )
 
+    base_default_scheduler_cls: Optional[Type[Any]] = None
+    base_default_scheduler_config: Optional[Dict[str, Any]] = None
+    base_scheduler_mode = "original"
+
+    scheduler = getattr(base_pipeline, "scheduler", None)
+    if scheduler is not None:
+        base_default_scheduler_cls = scheduler.__class__
+        base_default_scheduler_config = deepcopy(getattr(scheduler, "config", {}))
+
     if config.scheduler_setup is not None:
         config.scheduler_setup(base_pipeline)
+        base_scheduler_mode = "configured"
 
     base_default_vae: Optional[AutoencoderKL]
     base_default_vae = getattr(base_pipeline, "vae", None)
@@ -284,9 +299,49 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
         vae_variant=config.vae_variant,
         torch_dtype=torch_dtype,
         device=device,
+        base_default_scheduler_cls=base_default_scheduler_cls,
+        base_default_scheduler_config=base_default_scheduler_config,
+        base_scheduler_mode=base_scheduler_mode,
     )
     _PIPELINE_CACHE[cache_key] = loaded
     return config, loaded
+
+
+def _configure_pipeline_scheduler(
+    pipelines: LoadedPipelines,
+    config: ModelConfig,
+    use_configured_scheduler: Optional[bool],
+) -> None:
+    """Ensure the base pipeline uses either the configured or default scheduler."""
+
+    base_pipeline = pipelines.base
+
+    if not hasattr(base_pipeline, "scheduler"):
+        return
+
+    target_use_configured = use_configured_scheduler
+    if target_use_configured is None:
+        target_use_configured = config.scheduler_setup is not None
+
+    if target_use_configured:
+        if config.scheduler_setup is None:
+            return
+        if pipelines.base_scheduler_mode != "configured":
+            config.scheduler_setup(base_pipeline)
+            pipelines.base_scheduler_mode = "configured"
+        return
+
+    if (
+        pipelines.base_default_scheduler_cls is None
+        or pipelines.base_default_scheduler_config is None
+    ):
+        return
+
+    if pipelines.base_scheduler_mode != "original":
+        base_pipeline.scheduler = pipelines.base_default_scheduler_cls.from_config(
+            deepcopy(pipelines.base_default_scheduler_config)
+        )
+        pipelines.base_scheduler_mode = "original"
 
 
 def _configure_pipeline_vae(pipelines: LoadedPipelines, use_custom_vae: Optional[bool]) -> None:
@@ -401,6 +456,7 @@ def generate_image(
     model: Optional[str] = None,
     workflow: Optional[str] = None,
     use_custom_vae: Optional[bool] = None,
+    use_configured_scheduler: Optional[bool] = None,
     refiner_start: Optional[float] = None,
     **pipeline_kwargs: Any,
 ) -> Image.Image:
@@ -427,6 +483,13 @@ def generate_image(
         VAE (such as the SDXL FP16 fix). When ``False`` the pipeline reverts to
         its default autoencoder. ``None`` (default) chooses the external VAE
         when available and otherwise keeps the pipeline default.
+
+    use_configured_scheduler:
+        Controls whether the model-specific scheduler configuration (such as
+        RealVis XL's DPM++ 2M Karras setup) should be applied. ``True`` keeps
+        the configured scheduler, ``False`` restores the original scheduler
+        shipped with the checkpoint, and ``None`` (default) uses the configured
+        scheduler when available.
 
     refiner_start:
         Optional fraction in the ``[0, 1]`` range indicating when the SDXL
@@ -472,6 +535,8 @@ def generate_image(
         selected_workflow == _WORKFLOW_BASE_REFINER
         or (selected_workflow == _WORKFLOW_AUTO and refiner_pipeline is not None)
     )
+
+    _configure_pipeline_scheduler(pipelines, config, use_configured_scheduler)
 
     effective_use_custom_vae = use_custom_vae
     if effective_use_custom_vae is None and selected_workflow == _WORKFLOW_BASE_ONLY:
