@@ -260,6 +260,9 @@ def _load_pipeline(model_name: Optional[str] = None) -> Tuple[ModelConfig, Loade
         config.model_id, config.pipeline_cls, config.variant, stage_label="base"
     )
 
+    if config.scheduler_setup is not None:
+        config.scheduler_setup(base_pipeline)
+
     base_default_vae: Optional[AutoencoderKL]
     base_default_vae = getattr(base_pipeline, "vae", None)
 

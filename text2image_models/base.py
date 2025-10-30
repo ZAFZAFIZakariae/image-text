@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Type
+from typing import Callable, Optional, Type
 
 from diffusers import DiffusionPipeline
 
@@ -21,3 +21,4 @@ class ModelConfig:
     refiner_cls: Optional[Type[DiffusionPipeline]] = None
     refiner_variant: Optional[str] = None
     refiner_high_noise_frac: Optional[float] = None
+    scheduler_setup: Optional[Callable[[DiffusionPipeline], None]] = None
