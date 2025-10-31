@@ -97,10 +97,26 @@ def main() -> None:
         raise SystemExit(f"Image directory {image_dir} does not exist or is not a directory.")
 
     manifest_path = args.manifest
-    if not manifest_path.is_absolute():
-        manifest_path = image_dir / manifest_path
-    if not manifest_path.is_file():
-        raise SystemExit(f"Manifest file {manifest_path} does not exist.")
+    if manifest_path.is_absolute():
+        resolved_manifest = manifest_path
+    else:
+        cwd_manifest = (Path.cwd() / manifest_path).resolve()
+        if cwd_manifest.is_file():
+            resolved_manifest = cwd_manifest
+        else:
+            image_dir_manifest = (image_dir / manifest_path).resolve()
+            if image_dir_manifest.is_file():
+                resolved_manifest = image_dir_manifest
+            else:
+                raise SystemExit(
+                    "Manifest file {0} does not exist. Tried {1} and {2}.".format(
+                        manifest_path,
+                        cwd_manifest,
+                        image_dir_manifest,
+                    )
+                )
+
+    manifest_path = resolved_manifest
 
     caption_extension = _normalize_extension(args.caption_extension)
 
