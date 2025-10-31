@@ -101,6 +101,82 @@ the destination directory (omit `--output-dir` to operate in place). Adjust
 
    The manifest stores relative file paths, so placing it next to the image directory keeps the structure portable. Re-run the command with `--refresh` if you need to regenerate captions.
 
+### Convert the manifest to caption sidecars
+
+`create_caption_sidecars.py` reads each `{ "file": ..., "text": ... }` entry in your `metadata.jsonl` and writes a plain-text sidecar file next to the corresponding image. By default those files end in `.txt`, so an entry for `characters/pose01.png` produces `characters/pose01.txt` with the caption content on a single line. Existing caption files are left untouched unless you opt in to overwrite them.
+
+Run the helper from the repository root once your manifest is ready:
+
+```bash
+python create_caption_sidecars.py \
+    /path/to/images \
+    --manifest /path/to/metadata.jsonl \
+    --caption-extension .txt \
+    --skip-missing-images
+```
+
+Replace `/path/to/images` with the folder that mirrors the relative `file` paths stored in the manifest. The command prints how many caption files were created, how many existing ones were skipped, and the absolute directory where the sidecars were stored. Remove `--skip-missing-images` to surface typos immediately, or append `--overwrite` if you want to regenerate captions for files that already have sidecars.
+
+### Kick off training with caption sidecars
+
+The Kohya-based launcher provided in this repository (`train_realvis_locon_dora.py`) expects the paired image–caption layout produced by `create_caption_sidecars.py`. Once the helper finishes, you can start fine-tuning straight away by pointing the trainer at the same directory and matching the caption extension:
+
+```bash
+python train_realvis_locon_dora.py \
+    --data-dir /path/to/images \
+    --caption-extension .txt \
+    --network-rank 16 \
+    --resolution 1024 \
+    --train-steps 1000 \
+    --output-dir /path/to/checkpoints
+```
+
+Adjust the optimisation parameters (rank, steps, resolution, learning rate, etc.) to suit your hardware. The script scans the dataset directory recursively, pairing each image with the caption file that shares its basename and the extension provided via `--caption-extension`. With the sidecars in place there is no additional preprocessing required.
+
+### Export captions to sidecar files on Google Colab
+
+If you want to convert the `metadata.jsonl` manifest into per-image caption files (`.txt` by default) inside a Colab runtime, run the helper introduced in this repository with the following steps:
+
+1. **Clone the repo & install lightweight dependencies** – in a new Colab notebook cell, run:
+
+   ```bash
+   %cd /content
+   !git clone https://github.com/<your-account>/image-text.git
+   %cd image-text
+   !pip install -q -r requirements.txt
+   ```
+
+   Installing the full requirements ensures the same tokenizer and codec versions used to build the manifest are available. If you only need the caption exporter, the standard library is sufficient and you can skip the `pip install` line.
+
+2. **Mount your dataset** – either upload the images and `metadata.jsonl` directly into `/content`, or mount Google Drive:
+
+   ```bash
+   from google.colab import drive
+   drive.mount('/content/drive')
+   ```
+
+   Adjust the paths in the next step so they point to the folder that contains both the images and the manifest file.
+
+3. **Run the caption exporter** – pass the root folder that contains the training images as `image_dir`. Override `--manifest` when the JSONL file lives outside that directory, and change `--caption-extension` if you need a suffix other than `.txt`:
+
+   ```bash
+   !python create_caption_sidecars.py \
+       /content/path/to/images \
+       --manifest metadata.jsonl \
+       --caption-extension .txt \
+       --skip-missing-images
+   ```
+
+   The script mirrors the folder structure and writes `image_name.txt` (or your chosen extension) next to each image. Remove `--skip-missing-images` to surface typos immediately, or append `--overwrite` if you want to regenerate captions for files that already have sidecars.
+
+   When the run finishes you will see a confirmation similar to:
+
+   ```
+   Created 512 caption files. Skipped 8 existing files. Caption files written alongside images under /content/path/to/images.
+   ```
+
+   This summary reports how many captions were produced, how many files were left untouched, and where the text files now live.
+
 2. **Launch fine-tuning** – once you have the manifest, call the training script and point it at the dataset folder (containing the images and the newly created `metadata.jsonl`).
 
    ```bash
