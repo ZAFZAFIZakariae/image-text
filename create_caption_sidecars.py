@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 from typing import Iterable, Tuple
 
+from tqdm.auto import tqdm
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -89,6 +91,52 @@ def _iter_manifest_entries(manifest_path: Path) -> Iterable[Tuple[str, str]]:
             yield str(record["file"]), str(record["text"])
 
 
+def _count_manifest_entries(manifest_path: Path) -> int:
+    """Return the number of non-empty entries contained in ``manifest_path``."""
+
+    count = 0
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            if raw_line.strip():
+                count += 1
+    return count
+
+
+def _resolve_image_path(image_dir: Path, manifest_path: str) -> Path:
+    """Return the filesystem path for ``manifest_path`` within ``image_dir``.
+
+    The manifest may store paths in a variety of layouts – absolute paths,
+    entries relative to the dataset root, or entries that redundantly include
+    the dataset directory name (for example ``dataset/dataset/foo.png``).
+
+    This helper normalises these cases so that common manifest variations are
+    accepted without producing duplicated directory segments when joined with
+    ``image_dir``.
+    """
+
+    candidate = Path(manifest_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+
+    image_dir_parts = image_dir.resolve().parts
+    candidate_parts = candidate.parts
+
+    # Drop any leading path components that mirror the tail of ``image_dir``.
+    # This allows manifests that are relative to the parent directory (and thus
+    # include the dataset directory name) to work seamlessly.
+    trimmed_index = 0
+    max_prefix = min(len(candidate_parts), len(image_dir_parts))
+    for prefix_len in range(max_prefix, 0, -1):
+        if candidate_parts[:prefix_len] == image_dir_parts[-prefix_len:]:
+            trimmed_index = prefix_len
+            break
+
+    if trimmed_index:
+        candidate = Path(*candidate_parts[trimmed_index:])
+
+    return (image_dir / candidate).resolve()
+
+
 def main() -> None:
     args = parse_args()
 
@@ -124,8 +172,16 @@ def main() -> None:
     skipped_existing = 0
     missing_images = 0
 
-    for relative_image, caption in _iter_manifest_entries(manifest_path):
-        image_path = image_dir / relative_image
+    total_entries = _count_manifest_entries(manifest_path)
+    progress = tqdm(
+        _iter_manifest_entries(manifest_path),
+        total=total_entries,
+        desc="Captioning",
+        unit="image",
+    )
+
+    for relative_image, caption in progress:
+        image_path = _resolve_image_path(image_dir, relative_image)
         if not image_path.is_file():
             if args.skip_missing_images:
                 missing_images += 1
@@ -142,6 +198,8 @@ def main() -> None:
         caption_path.parent.mkdir(parents=True, exist_ok=True)
         caption_path.write_text(caption + "\n", encoding="utf-8")
         created += 1
+
+    progress.close()
 
     summary = (
         f"Created {created} caption file{'s' if created != 1 else ''}."
