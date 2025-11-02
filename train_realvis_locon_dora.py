@@ -274,14 +274,25 @@ COLAB_INSTALL_SNIPPET = textwrap.dedent(
 
 
 def _format_missing_dependency_hint(remaining: Sequence[str]) -> str:
-    lines = [
-        "Missing training dependencies: {}.".format(", ".join(sorted(remaining)))
-    ]
+    missing_display = ", ".join(sorted(remaining))
+    lines = [f"Missing training dependencies: {missing_display}."]
 
     if "kohya_ss" in remaining:
-        lines.append("Install Kohya (kohya_ss) before launching the trainer.")
+        lines.append(
+            "Install Kohya (kohya_ss) before launching the trainer or point the"
+            " loader at an existing clone by setting the KOHYA_SS_PATH environment"
+            " variable."
+        )
+        lines.append(
+            "Local checkouts named 'kohya_ss' or 'kohya-ss' next to this script are"
+            " detected automatically."
+        )
     if "lycoris" in remaining:
-        lines.append("Install LyCORIS before launching the trainer.")
+        lines.append(
+            "Install LyCORIS before launching the trainer."
+            " If you cloned lycoris manually, set LYCORIS_PATH to the clone root"
+            " so it can be discovered."
+        )
 
     lines.append(
         "In Google Colab you can install the required packages by running the following cell:"
@@ -291,8 +302,80 @@ def _format_missing_dependency_hint(remaining: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
+def _collect_subprocess_output(
+    error: subprocess.CalledProcessError, limit: int = 20
+) -> str:
+    """Summarise stdout/stderr captured from a ``CalledProcessError``."""
+
+    combined: List[str] = []
+
+    for stream in (error.output, error.stderr):
+        if not stream:
+            continue
+
+        if isinstance(stream, bytes):
+            text = stream.decode("utf-8", errors="replace")
+        else:
+            text = str(stream)
+
+        combined.extend(text.splitlines())
+
+    if len(combined) > limit:
+        combined = combined[-limit:]
+
+    return "\n".join(combined)
+
+
+def _iter_candidate_dependency_paths(package: str, repo_names: Sequence[str]) -> Iterable[Path]:
+    """Yield potential directories that may contain a local clone of a dependency."""
+
+    env_var = f"{package.upper()}_PATH"
+    env_path = os.environ.get(env_var)
+    if env_path:
+        yield Path(env_path)
+
+    script_dir = Path(__file__).resolve().parent
+    cwd = Path.cwd()
+
+    for base in {script_dir, cwd, script_dir.parent, cwd.parent}:
+        for repo_name in repo_names:
+            yield base / repo_name
+
+
+def _maybe_add_local_dependency(package: str, repo_names: Sequence[str]) -> None:
+    """Add a local clone of ``package`` to ``sys.path`` when detected.
+
+    Google Colab users often clone ``kohya_ss`` next to this repository instead of
+    installing it via ``pip``. Import discovery fails in that scenario because the
+    clone is not added to ``PYTHONPATH``. By probing for common locations we can
+    provide a smoother out-of-the-box experience while still allowing explicit
+    installations to take precedence when available.
+    """
+
+    for candidate in _iter_candidate_dependency_paths(package, repo_names):
+        if not candidate.exists():
+            continue
+
+        # ``kohya_ss`` is importable from the repository root whereas ``lycoris``
+        # exposes the package from the ``lycoris`` directory inside the clone.
+        candidate_package = candidate / package
+        if candidate_package.exists():
+            path_to_add = candidate_package
+        else:
+            path_to_add = candidate
+
+        if str(path_to_add) not in sys.path:
+            sys.path.insert(0, str(path_to_add))
+
+        if importlib.util.find_spec(package) is not None:
+            return
+
+
 def ensure_dependencies(_: argparse.Namespace) -> None:
     """Ensure the required third-party modules are available."""
+
+    _maybe_add_local_dependency("kohya_ss", ("kohya_ss", "kohya-ss"))
+    _maybe_add_local_dependency("lycoris", ("lycoris", "lycoris-lora", "lycoris_lora"))
 
     missing = [
         name
