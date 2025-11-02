@@ -205,7 +205,32 @@ You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base 
      --train_batch_size=1 --gradient_accumulation_steps=8
    ```
 
-   `--cache_latents_to_disk` keeps long runs stable on Colab. Monitor the quality of intermediate checkpoints (saved every 1,000 steps) and stop early if your results plateau—many 60k-image runs converge between 16k and 24k steps. Keep both EMA and non-EMA outputs if you plan to perform a full fine-tune later.
+`--cache_latents_to_disk` keeps long runs stable on Colab. Monitor the quality of intermediate checkpoints (saved every 1,000 steps) and stop early if your results plateau—many 60k-image runs converge between 16k and 24k steps. Keep both EMA and non-EMA outputs if you plan to perform a full fine-tune later.
+
+### Resuming LyCORIS runs and controlling DataLoader order
+
+Supplying `--resume` alongside a saved checkpoint restores the network weights,
+optimizer state, and global step counter so training continues from the exact
+step where it stopped. Historically, the PyTorch `DataLoader` would rebuild in a
+freshly shuffled order every time, so the resumed run might replay samples near
+the resume point. The `train_realvis_locon_dora.py` launcher now installs a
+runtime patch that keeps the shuffle order deterministic and skips the
+already-seen mini-batches the first time the loader iterates after a resume.
+
+* The helper persists a seed (default `3407`) the first time it runs. Override
+  it with `--seed` if you prefer a specific value, or supply
+  `--disable-dataloader-state` to fall back to Kohya's native behaviour.
+* When resuming, the script infers the completed step count from the checkpoint
+  filename (e.g. `*-00012000.safetensors`). If your naming scheme differs, add
+  `--resume-step N` so the loader can skip the correct number of samples. The
+  number of skipped samples accounts for gradient accumulation
+  (`train_batch_size × gradient_accumulation_steps`).
+* The temporary state file lives next to the output directory. Deleting it is a
+  quick way to reseed the shuffle order between experiments.
+
+With those safeguards in place you can resume training by simply pointing
+`--resume` at the latest checkpoint—the command will continue from the next
+unseen sample while keeping the optimiser state intact.
 
 If you prefer to store the configuration locally and trigger the same training command from this repository, use the helper script:
 
