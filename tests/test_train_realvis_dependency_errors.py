@@ -10,10 +10,10 @@ from train_realvis_locon_dora import (
 )
 
 
-def test_format_missing_dependency_hint_includes_skip_auto_install() -> None:
+def test_format_missing_dependency_hint_includes_local_clone_guidance() -> None:
     message = _format_missing_dependency_hint(["kohya_ss"])
-    assert "--skip-auto-install" in message
-    assert "--kohya-ss-package" in message
+    assert "KOHYA_SS_PATH" in message
+    assert "detected automatically" in message
 
 
 @pytest.mark.parametrize("line_count", [5, 25])
