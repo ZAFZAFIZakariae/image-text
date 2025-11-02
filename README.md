@@ -11,7 +11,7 @@ This repository contains scripts for text-to-image generation and image captioni
    pip install -r requirements.txt
    ```
 
-   The requirements include the SDXL refiner dependencies (`accelerate` and `safetensors`) and follow the setup recommended in the Diffusers documentation. Make sure you have a recent version of `pip`. If you are targeting GPU execution (e.g., CUDA 11.8 on Colab), install PyTorch from the official index first using the command shown in the Colab section below so that `pip install -r requirements.txt` reuses that compatible wheel.
+   The requirements file now pins a CUDA 12.6-compatible PyTorch stack (`torch==2.8.0+cu126`, `torchvision==0.23.0+cu126`, `torchaudio==2.8.0+cu126`) and adds the matching `fsspec`/`gcsfs` pair so the Kohya installer no longer reports version conflicts. It also declares the official PyTorch wheel index via `--extra-index-url`, so `pip install -r requirements.txt` will fetch the aligned binaries automatically in a fresh Colab runtime. If you are on a different accelerator (CPU-only, ROCm, or an older CUDA toolkit), edit those lines to match your environment before installing.
 
 ## Running Inference
 
@@ -327,6 +327,26 @@ GPU support dramatically speeds up Stable Diffusion and other diffusion-based mo
 - Ensure your GPU drivers and CUDA toolkit match the versions required by PyTorch.
 - When running locally without a GPU, expect significantly slower inference for Stable Diffusion models.
 - For additional options, consult the script-level `--help` flags (e.g., `python run_text2image.py --help`).
+
+### Resolving PyTorch/TorchAudio/TorchVision version conflicts on Colab
+
+Colab images occasionally ship with mismatched PyTorch companion libraries—for example, `torchaudio 2.8.0+cu126` requires `torch==2.8.0`, but the runtime might only include `torch 2.4.0`. Aligning the package versions resolves the `pip` errors that complain about incompatible wheels (including `gcsfs`/`fsspec` pinning issues). Reinstall a consistent set of packages based on the runtime you want:
+
+- **Upgrade to the latest CUDA 12.6 builds** (recommended when you do not need an older torch):
+
+  ```bash
+  pip install --upgrade torch==2.8.0+cu126 torchvision==0.23.0+cu126 torchaudio==2.8.0+cu126 \
+      --index-url https://download.pytorch.org/whl/cu126
+  pip install --upgrade fsspec==2025.3.0
+  ```
+
+- **Stay on PyTorch 2.4.0** (if you already rely on that version):
+
+  ```bash
+  pip install --upgrade torchvision==0.15.2 torchaudio==2.4.1 fsspec==2025.3.0
+  ```
+
+Uninstall any conflicting builds first (`pip uninstall -y torch torchvision torchaudio`) and restart the Colab runtime after reinstalling so the new binaries load cleanly.
 
 ## Testing the Setup
 
