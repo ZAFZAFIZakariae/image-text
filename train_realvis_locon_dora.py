@@ -189,6 +189,28 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Path to a previous Kohya checkpoint to resume from",
     )
 
+    parser.add_argument(
+        "--kohya-ss-package",
+        default="git+https://github.com/bmaltais/kohya_ss.git@master",
+        help=(
+            "Pip requirement to install if kohya_ss is missing. Accepts local paths"
+            " for offline environments."
+        ),
+    )
+    parser.add_argument(
+        "--lycoris-package",
+        default="lycoris-lora",
+        help=(
+            "Pip requirement to install if lycoris is missing. Accepts local paths"
+            " for offline environments."
+        ),
+    )
+    parser.add_argument(
+        "--skip-auto-install",
+        action="store_true",
+        help="Disable automatic pip installation of missing dependencies.",
+    )
+
     # Optional overrides
     for name in (
         "network_dim",
@@ -233,12 +255,29 @@ def ensure_directories(args: argparse.Namespace) -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
 
-def ensure_dependencies() -> None:
+def _format_missing_dependency_hint(remaining: Sequence[str]) -> str:
+    hint = [
+        "Missing training dependencies: {}.".format(", ".join(sorted(remaining)))
+    ]
+
+    if "kohya_ss" in remaining:
+        hint.append(
+            "Install Kohya manually or point --kohya-ss-package to a local path."
+        )
+    if "lycoris" in remaining:
+        hint.append(
+            "Install LyCORIS manually or point --lycoris-package to a local path."
+        )
+
+    return " ".join(hint)
+
+
+def ensure_dependencies(args: argparse.Namespace) -> None:
     """Ensure the required third-party modules are available."""
 
     dependencies = {
-        "kohya_ss": "git+https://github.com/bmaltais/kohya_ss.git@master",
-        "lycoris": "lycoris-lora",
+        "kohya_ss": args.kohya_ss_package,
+        "lycoris": args.lycoris_package,
     }
 
     missing = [
@@ -248,11 +287,18 @@ def ensure_dependencies() -> None:
     if not missing:
         return
 
+    if args.skip_auto_install:
+        raise ModuleNotFoundError(_format_missing_dependency_hint(missing))
+
     # Try to install the missing packages automatically to reduce friction for
     # first-time users. We keep the installation quiet to avoid excessive log
-    # spam but still report the command being executed.
+    # spam but still report the command being executed. If a package does not
+    # have an install target (empty string) we simply skip the automated
+    # installation attempt so the user can provide their own distribution.
     for module_name in missing:
         requirement = dependencies[module_name]
+        if not requirement:
+            continue
         print(
             f"Missing dependency '{module_name}'. Attempting to install via pip: {requirement}"
         )
@@ -281,24 +327,13 @@ def ensure_dependencies() -> None:
     ]
 
     if remaining:
-        hint = [
-            "Missing training dependencies: {}.".format(", ".join(sorted(remaining)))
-        ]
-
-        if "kohya_ss" in remaining:
-            hint.append(
-                "Install Kohya with `pip install -q git+https://github.com/bmaltais/kohya_ss.git@master`."
-            )
-        if "lycoris" in remaining:
-            hint.append("Install LyCORIS with `pip install -q lycoris-lora`.")
-
-        raise ModuleNotFoundError(" ".join(hint))
+        raise ModuleNotFoundError(_format_missing_dependency_hint(remaining))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
-    ensure_dependencies()
+    ensure_dependencies(args)
     ensure_directories(args)
     command = build_command(args)
 
