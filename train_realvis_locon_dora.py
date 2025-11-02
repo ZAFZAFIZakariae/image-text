@@ -10,6 +10,7 @@ import re
 import shlex
 import subprocess
 import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
@@ -210,28 +211,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
 
-    parser.add_argument(
-        "--kohya-ss-package",
-        default="git+https://github.com/bmaltais/kohya_ss.git@master",
-        help=(
-            "Pip requirement to install if kohya_ss is missing. Accepts local paths"
-            " for offline environments."
-        ),
-    )
-    parser.add_argument(
-        "--lycoris-package",
-        default="lycoris-lora",
-        help=(
-            "Pip requirement to install if lycoris is missing. Accepts local paths"
-            " for offline environments."
-        ),
-    )
-    parser.add_argument(
-        "--skip-auto-install",
-        action="store_true",
-        help="Disable automatic pip installation of missing dependencies.",
-    )
-
     # Optional overrides
     for name in (
         "network_dim",
@@ -284,116 +263,45 @@ def ensure_directories(args: argparse.Namespace) -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
 
+COLAB_INSTALL_SNIPPET = textwrap.dedent(
+    """
+    # Install training dependencies
+    !pip install --upgrade pip
+    !pip install git+https://github.com/bmaltais/kohya_ss.git@master
+    !pip install lycoris-lora
+    """
+).strip()
+
+
 def _format_missing_dependency_hint(remaining: Sequence[str]) -> str:
-    hint = [
+    lines = [
         "Missing training dependencies: {}.".format(", ".join(sorted(remaining)))
     ]
 
     if "kohya_ss" in remaining:
-        hint.append(
-            "Install Kohya manually or point --kohya-ss-package to a local path."
-        )
+        lines.append("Install Kohya (kohya_ss) before launching the trainer.")
     if "lycoris" in remaining:
-        hint.append(
-            "Install LyCORIS manually or point --lycoris-package to a local path."
-        )
+        lines.append("Install LyCORIS before launching the trainer.")
 
-    hint.append(
-        "Re-run with --skip-auto-install to disable automatic installation attempts if you would prefer to manage dependencies yourself."
+    lines.append(
+        "In Google Colab you can install the required packages by running the following cell:"
     )
+    lines.append("\n" + COLAB_INSTALL_SNIPPET)
 
-    return " ".join(hint)
-
-
-def _collect_subprocess_output(exc: subprocess.CalledProcessError) -> str:
-    """Return a condensed string of the captured subprocess output."""
-
-    outputs = []
-    for stream in (getattr(exc, "stdout", None), getattr(exc, "stderr", None)):
-        if stream:
-            outputs.append(stream.strip())
-
-    if not outputs:
-        return ""
-
-    combined = "\n".join(part for part in outputs if part)
-    lines = [line for line in combined.splitlines() if line]
-
-    if len(lines) <= 20:
-        return "\n".join(lines)
-
-    # When the output is verbose we only surface the final lines which usually
-    # contain the actionable error message.
-    return "\n".join(lines[-20:])
+    return "\n".join(lines)
 
 
-def ensure_dependencies(args: argparse.Namespace) -> None:
+def ensure_dependencies(_: argparse.Namespace) -> None:
     """Ensure the required third-party modules are available."""
 
-    dependencies = {
-        "kohya_ss": args.kohya_ss_package,
-        "lycoris": args.lycoris_package,
-    }
-
     missing = [
-        name for name in dependencies if importlib.util.find_spec(name) is None
+        name
+        for name in ("kohya_ss", "lycoris")
+        if importlib.util.find_spec(name) is None
     ]
 
-    if not missing:
-        return
-
-    if args.skip_auto_install:
+    if missing:
         raise ModuleNotFoundError(_format_missing_dependency_hint(missing))
-
-    # Try to install the missing packages automatically to reduce friction for
-    # first-time users. We keep the installation quiet to avoid excessive log
-    # spam but still report the command being executed. If a package does not
-    # have an install target (empty string) we simply skip the automated
-    # installation attempt so the user can provide their own distribution.
-    for module_name in missing:
-        requirement = dependencies[module_name]
-        if not requirement:
-            continue
-        print(
-            f"Missing dependency '{module_name}'. Attempting to install via pip: {requirement}"
-        )
-        try:
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "-q",
-                    requirement,
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except subprocess.CalledProcessError as exc:  # pragma: no cover - network dependent
-            output = _collect_subprocess_output(exc)
-            details = _format_missing_dependency_hint([module_name])
-            if output:
-                details = f"{details} Installation failed with:\n{output}"
-            raise ModuleNotFoundError(
-                "Failed to install '{}' from requirement '{}'. {}".format(
-                    module_name,
-                    requirement,
-                    details,
-                )
-            ) from exc
-
-    # Validate that the installation succeeded before continuing. If a package
-    # is still unavailable we raise a helpful error message with manual
-    # installation guidance so the user can resolve the issue themselves.
-    remaining = [
-        name for name in dependencies if importlib.util.find_spec(name) is None
-    ]
-
-    if remaining:
-        raise ModuleNotFoundError(_format_missing_dependency_hint(remaining))
 
 
 def _iter_image_entries(data_dir: Path) -> Iterable[Path]:
