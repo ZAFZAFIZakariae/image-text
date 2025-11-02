@@ -342,6 +342,9 @@ def _iter_candidate_dependency_paths(package: str, repo_names: Sequence[str]) ->
             yield base / repo_name
 
 
+_ADDED_DEPENDENCY_PATHS: List[str] = []
+
+
 def _maybe_add_local_dependency(package: str, repo_names: Sequence[str]) -> None:
     """Add a local clone of ``package`` to ``sys.path`` when detected.
 
@@ -364,8 +367,13 @@ def _maybe_add_local_dependency(package: str, repo_names: Sequence[str]) -> None
         else:
             path_to_add = candidate
 
-        if str(path_to_add) not in sys.path:
-            sys.path.insert(0, str(path_to_add))
+        path_str = str(path_to_add)
+
+        if path_str not in sys.path:
+            sys.path.insert(0, path_str)
+
+        if path_str not in _ADDED_DEPENDENCY_PATHS:
+            _ADDED_DEPENDENCY_PATHS.append(path_str)
 
         if importlib.util.find_spec(package) is not None:
             return
@@ -532,13 +540,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     env = os.environ.copy()
+
+    pythonpath_entries: List[str] = []
+
     if loader_state is not None:
         env["IMAGETEXT_DATA_LOADER_STATE"] = str(loader_state.path)
-        project_root = str(Path(__file__).resolve().parent)
+        pythonpath_entries.append(str(Path(__file__).resolve().parent))
+
+    pythonpath_entries.extend(_ADDED_DEPENDENCY_PATHS)
+
+    if pythonpath_entries:
         existing_pythonpath = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = (
-            f"{project_root}:{existing_pythonpath}" if existing_pythonpath else project_root
-        )
+        combined = pythonpath_entries.copy()
+        if existing_pythonpath:
+            combined.append(existing_pythonpath)
+        env["PYTHONPATH"] = ":".join(combined)
 
     process = subprocess.run(command, env=env)
     return process.returncode
