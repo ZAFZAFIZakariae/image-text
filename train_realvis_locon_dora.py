@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence
 
 
 @dataclass(frozen=True)
@@ -19,6 +22,11 @@ class Preset:
     name: str
     description: str
     overrides: Dict[str, str]
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+DEFAULT_DATA_LOADER_SEED = 3407
 
 
 COMMON_DEFAULTS: Dict[str, str] = {
@@ -57,9 +65,8 @@ PRESETS: Dict[str, Preset] = {
     ),
 }
 
-
-def build_command(args: argparse.Namespace) -> List[str]:
-    """Assemble the kohya_ss command from CLI arguments."""
+def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
+    """Resolve the merged preset + CLI configuration values."""
 
     preset = PRESETS[args.preset]
 
@@ -86,6 +93,12 @@ def build_command(args: argparse.Namespace) -> List[str]:
         value = getattr(args, key, None)
         if value is not None:
             resolved[key] = str(value)
+
+    return resolved
+
+
+def build_command(args: argparse.Namespace, resolved: Dict[str, str]) -> List[str]:
+    """Assemble the kohya_ss command from CLI arguments."""
 
     command = [
         sys.executable,
@@ -188,6 +201,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--resume",
         help="Path to a previous Kohya checkpoint to resume from",
     )
+    parser.add_argument(
+        "--resume-step",
+        type=int,
+        help=(
+            "Number of optimizer steps completed in the checkpoint specified with --resume. "
+            "Overrides the value inferred from the checkpoint filename."
+        ),
+    )
 
     parser.add_argument(
         "--kohya-ss-package",
@@ -234,6 +255,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Print the computed command without executing it",
+    )
+    parser.add_argument(
+        "--disable-dataloader-state",
+        action="store_true",
+        help=(
+            "Skip installing the deterministic DataLoader patch that preserves ordering "
+            "and skips batches on resume."
+        ),
     )
     parser.add_argument(
         "--additional-argument",
@@ -330,12 +359,142 @@ def ensure_dependencies(args: argparse.Namespace) -> None:
         raise ModuleNotFoundError(_format_missing_dependency_hint(remaining))
 
 
+def _iter_image_entries(data_dir: Path) -> Iterable[Path]:
+    for path in data_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            yield path
+
+
+def collect_dataset_entries(data_dir: Path, caption_extension: str) -> List[Path]:
+    """Collect dataset image paths that have matching caption files."""
+
+    if not caption_extension.startswith("."):
+        caption_extension = f".{caption_extension}"
+
+    images: List[Path] = []
+    missing_captions: List[Path] = []
+
+    for image_path in _iter_image_entries(data_dir):
+        caption_path = image_path.with_suffix(caption_extension)
+        if caption_path.exists():
+            images.append(image_path)
+        else:
+            missing_captions.append(image_path)
+
+    if missing_captions:
+        print(
+            "Warning: Skipping %d images without matching %s captions." % (
+                len(missing_captions),
+                caption_extension,
+            ),
+            file=sys.stderr,
+        )
+
+    images.sort()
+    return images
+
+
+def infer_resume_step(resume_path: str) -> Optional[int]:
+    """Best-effort extraction of the completed step count from a checkpoint name."""
+
+    stem = Path(resume_path).stem
+    match = re.search(r"(\d+)$", stem)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+@dataclass(frozen=True)
+class DataLoaderState:
+    path: Path
+    seed: int
+    skip_samples_once: int
+    dataset_size: int
+
+
+def prepare_dataloader_state(
+    args: argparse.Namespace, resolved: Dict[str, str]
+) -> Optional[DataLoaderState]:
+    """Generate the state file consumed by ``sitecustomize`` to patch PyTorch."""
+
+    if args.disable_dataloader_state:
+        return None
+
+    data_dir = Path(args.data_dir)
+    images = collect_dataset_entries(data_dir, args.caption_extension)
+
+    if not images:
+        raise ValueError(
+            "No training images with matching captions were found in the dataset directory."
+        )
+
+    dataset_size = len(images)
+    state_path = Path(args.output_dir) / f"{args.output_name}_dataloader_state.json"
+
+    existing_seed: Optional[int] = None
+    if state_path.exists():
+        try:
+            with state_path.open("r", encoding="utf-8") as fh:
+                state_data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            state_data = {}
+        existing_seed = state_data.get("seed")
+
+    seed = args.seed if args.seed is not None else existing_seed or DEFAULT_DATA_LOADER_SEED
+
+    resume_step = None
+    if args.resume:
+        if args.resume_step is not None:
+            resume_step = args.resume_step
+        else:
+            resume_step = infer_resume_step(args.resume)
+        if resume_step is None:
+            raise ValueError(
+                "Unable to infer the completed step count from the --resume checkpoint. "
+                "Provide --resume-step explicitly to enable DataLoader skipping."
+            )
+
+    skip_samples_once = 0
+    if resume_step is not None:
+        train_batch_size = int(resolved["train_batch_size"])
+        grad_accum = int(resolved["gradient_accumulation_steps"])
+        samples_per_step = train_batch_size * grad_accum
+        skip_samples_once = (resume_step * samples_per_step) % dataset_size
+
+    state_payload = {
+        "enabled": True,
+        "seed": seed,
+        "skip_samples_once": skip_samples_once,
+        "dataset_size": dataset_size,
+    }
+
+    with state_path.open("w", encoding="utf-8") as fh:
+        json.dump(state_payload, fh)
+
+    if skip_samples_once:
+        print(
+            f"DataLoader resume: skipping the first {skip_samples_once} samples "
+            f"out of {dataset_size} to align with checkpoint progress.",
+            file=sys.stderr,
+        )
+
+    print(f"DataLoader seed fixed at {seed} for deterministic ordering.")
+
+    return DataLoaderState(state_path, seed, skip_samples_once, dataset_size)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
     ensure_dependencies(args)
     ensure_directories(args)
-    command = build_command(args)
+    resolved = resolve_training_config(args)
+
+    loader_state = prepare_dataloader_state(args, resolved)
+    if loader_state is not None:
+        args.seed = loader_state.seed
+
+    command = build_command(args, resolved)
 
     printable = " ".join(shlex.quote(token) for token in command)
     print("Running:")
@@ -344,7 +503,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    process = subprocess.run(command)
+    env = os.environ.copy()
+    if loader_state is not None:
+        env["IMAGETEXT_DATA_LOADER_STATE"] = str(loader_state.path)
+        project_root = str(Path(__file__).resolve().parent)
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{project_root}:{existing_pythonpath}" if existing_pythonpath else project_root
+        )
+
+    process = subprocess.run(command, env=env)
     return process.returncode
 
 
