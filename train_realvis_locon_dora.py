@@ -236,28 +236,63 @@ def ensure_directories(args: argparse.Namespace) -> None:
 def ensure_dependencies() -> None:
     """Ensure the required third-party modules are available."""
 
-    missing = []
-    for module_name in ("kohya_ss", "lycoris"):
-        if importlib.util.find_spec(module_name) is None:
-            missing.append(module_name)
+    dependencies = {
+        "kohya_ss": "git+https://github.com/bmaltais/kohya_ss.git@master",
+        "lycoris": "lycoris-lora",
+    }
+
+    missing = [
+        name for name in dependencies if importlib.util.find_spec(name) is None
+    ]
 
     if not missing:
         return
 
-    hint = [
-        "Missing training dependencies: {}.".format(", ".join(sorted(missing)))
+    # Try to install the missing packages automatically to reduce friction for
+    # first-time users. We keep the installation quiet to avoid excessive log
+    # spam but still report the command being executed.
+    for module_name in missing:
+        requirement = dependencies[module_name]
+        print(
+            f"Missing dependency '{module_name}'. Attempting to install via pip: {requirement}"
+        )
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-q",
+                    requirement,
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - network dependent
+            raise ModuleNotFoundError(
+                f"Failed to install '{module_name}'. Original error: {exc}"
+            ) from exc
+
+    # Validate that the installation succeeded before continuing. If a package
+    # is still unavailable we raise a helpful error message with manual
+    # installation guidance so the user can resolve the issue themselves.
+    remaining = [
+        name for name in dependencies if importlib.util.find_spec(name) is None
     ]
 
-    if "kohya_ss" in missing:
-        hint.append(
-            "Install Kohya with `pip install -q git+https://github.com/bmaltais/kohya_ss.git@master`."
-        )
-    if "lycoris" in missing:
-        hint.append(
-            "Install LyCORIS with `pip install -q lycoris-lora`."
-        )
+    if remaining:
+        hint = [
+            "Missing training dependencies: {}.".format(", ".join(sorted(remaining)))
+        ]
 
-    raise ModuleNotFoundError(" ".join(hint))
+        if "kohya_ss" in remaining:
+            hint.append(
+                "Install Kohya with `pip install -q git+https://github.com/bmaltais/kohya_ss.git@master`."
+            )
+        if "lycoris" in remaining:
+            hint.append("Install LyCORIS with `pip install -q lycoris-lora`.")
+
+        raise ModuleNotFoundError(" ".join(hint))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
