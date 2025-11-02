@@ -98,13 +98,14 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
     return resolved
 
 
-def build_command(args: argparse.Namespace, resolved: Dict[str, str]) -> List[str]:
+def build_command(
+    args: argparse.Namespace, resolved: Dict[str, str], train_script: Path
+) -> List[str]:
     """Assemble the kohya_ss command from CLI arguments."""
 
     command = [
         sys.executable,
-        "-m",
-        "kohya_ss.train_network",
+        str(train_script),
         "--network_module=lycoris.kohya",
         "--algo=locon_dora",
         f"--network_dim={resolved['network_dim']}",
@@ -395,6 +396,39 @@ def ensure_dependencies(_: argparse.Namespace) -> None:
         raise ModuleNotFoundError(_format_missing_dependency_hint(missing))
 
 
+def resolve_kohya_train_script() -> Path:
+    """Return the filesystem path to ``train_network.py`` inside ``kohya_ss``."""
+
+    spec = importlib.util.find_spec("kohya_ss")
+    if spec is None:
+        raise ModuleNotFoundError(
+            "kohya_ss is not installed or discoverable; install it before launching."
+        )
+
+    if spec.submodule_search_locations:
+        package_root = Path(next(iter(spec.submodule_search_locations))).resolve()
+    elif spec.origin:
+        package_root = Path(spec.origin).resolve().parent
+    else:
+        raise ModuleNotFoundError("Unable to determine kohya_ss installation path.")
+
+    candidates = [
+        package_root / "sd-scripts" / "train_network.py",
+        package_root.parent / "sd-scripts" / "train_network.py",
+        package_root / "train_network.py",
+        package_root.parent / "kohya_ss" / "sd-scripts" / "train_network.py",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "Could not locate kohya_ss/sd-scripts/train_network.py. Ensure the repository is "
+        "installed with its training scripts."
+    )
+
+
 def _iter_image_entries(data_dir: Path) -> Iterable[Path]:
     for path in data_dir.rglob("*"):
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
@@ -530,7 +564,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if loader_state is not None:
         args.seed = loader_state.seed
 
-    command = build_command(args, resolved)
+    train_script = resolve_kohya_train_script()
+
+    command = build_command(args, resolved, train_script)
 
     printable = " ".join(shlex.quote(token) for token in command)
     print("Running:")
