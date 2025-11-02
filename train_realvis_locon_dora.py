@@ -298,7 +298,33 @@ def _format_missing_dependency_hint(remaining: Sequence[str]) -> str:
             "Install LyCORIS manually or point --lycoris-package to a local path."
         )
 
+    hint.append(
+        "Re-run with --skip-auto-install to disable automatic installation attempts if you would prefer to manage dependencies yourself."
+    )
+
     return " ".join(hint)
+
+
+def _collect_subprocess_output(exc: subprocess.CalledProcessError) -> str:
+    """Return a condensed string of the captured subprocess output."""
+
+    outputs = []
+    for stream in (getattr(exc, "stdout", None), getattr(exc, "stderr", None)):
+        if stream:
+            outputs.append(stream.strip())
+
+    if not outputs:
+        return ""
+
+    combined = "\n".join(part for part in outputs if part)
+    lines = [line for line in combined.splitlines() if line]
+
+    if len(lines) <= 20:
+        return "\n".join(lines)
+
+    # When the output is verbose we only surface the final lines which usually
+    # contain the actionable error message.
+    return "\n".join(lines[-20:])
 
 
 def ensure_dependencies(args: argparse.Namespace) -> None:
@@ -342,10 +368,21 @@ def ensure_dependencies(args: argparse.Namespace) -> None:
                     requirement,
                 ],
                 check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - network dependent
+            output = _collect_subprocess_output(exc)
+            details = _format_missing_dependency_hint([module_name])
+            if output:
+                details = f"{details} Installation failed with:\n{output}"
             raise ModuleNotFoundError(
-                f"Failed to install '{module_name}'. Original error: {exc}"
+                "Failed to install '{}' from requirement '{}'. {}".format(
+                    module_name,
+                    requirement,
+                    details,
+                )
             ) from exc
 
     # Validate that the installation succeeded before continuing. If a package
