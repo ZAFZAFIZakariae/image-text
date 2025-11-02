@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import shlex
 import subprocess
@@ -232,9 +233,37 @@ def ensure_directories(args: argparse.Namespace) -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
 
+def ensure_dependencies() -> None:
+    """Ensure the required third-party modules are available."""
+
+    missing = []
+    for module_name in ("kohya_ss", "lycoris"):
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(module_name)
+
+    if not missing:
+        return
+
+    hint = [
+        "Missing training dependencies: {}.".format(", ".join(sorted(missing)))
+    ]
+
+    if "kohya_ss" in missing:
+        hint.append(
+            "Install Kohya with `pip install -q git+https://github.com/bmaltais/kohya_ss.git@master`."
+        )
+    if "lycoris" in missing:
+        hint.append(
+            "Install LyCORIS with `pip install -q lycoris-lora`."
+        )
+
+    raise ModuleNotFoundError(" ".join(hint))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
+    ensure_dependencies()
     ensure_directories(args)
     command = build_command(args)
 
