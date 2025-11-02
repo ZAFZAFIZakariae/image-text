@@ -101,6 +101,14 @@ the destination directory (omit `--output-dir` to operate in place). Adjust
 
    The manifest stores relative file paths, so placing it next to the image directory keeps the structure portable. Re-run the command with `--refresh` if you need to regenerate captions.
 
+   If you delete or move images after the fact, clean up stale rows so training will not stumble over missing files:
+
+   ```bash
+   python prune_missing_manifest_entries.py /path/to/dataset
+   ```
+
+   The helper rewrites `metadata.jsonl` in place, keeping only entries whose images still exist next to the manifest.
+
 2. **Launch fine-tuning** – once you have the manifest, call the training script and point it at the dataset folder (containing the images and the newly created `metadata.jsonl`).
 
    ```bash
