@@ -165,7 +165,7 @@ You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base 
      --resolution=1024 --min_bucket_reso=640 --max_bucket_reso=1024 --bucket_reso_steps=64 \
      --output_dir="$OUT_DIR" --output_name="realvisxl_locon_dora_full60k" \
      --learning_rate=1e-4 --text_encoder_lr=5e-6 \
-     --optimizer_type=adamw8bit --weight_decay=0.01 --max_grad_norm=1.0 \
+     --optimizer_type=adamw8bit --optimizer_args "weight_decay=0.01" --max_grad_norm=1.0 \
      --lr_scheduler=cosine --lr_warmup_steps=1000 \
      --mixed_precision=bf16 --gradient_checkpointing \
      --min_snr_gamma=5.0 --noise_offset=0.02 \
@@ -189,7 +189,7 @@ You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base 
      --resolution=1024 --min_bucket_reso=640 --max_bucket_reso=1024 --bucket_reso_steps=64 \
      --output_dir="$OUT_DIR" --output_name="realvisxl_locon_dora_full60k" \
      --learning_rate=1e-4 --text_encoder_lr=5e-6 \
-     --optimizer_type=adamw8bit --weight_decay=0.01 --max_grad_norm=1.0 \
+     --optimizer_type=adamw8bit --optimizer_args "weight_decay=0.01" --max_grad_norm=1.0 \
      --lr_scheduler=cosine --lr_warmup_steps=1000 \
      --mixed_precision=bf16 --gradient_checkpointing \
      --min_snr_gamma=5.0 --noise_offset=0.02 \
