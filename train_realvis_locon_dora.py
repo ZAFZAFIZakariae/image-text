@@ -129,7 +129,6 @@ def build_command(
         f"--lr_warmup_ratio={resolved['lr_warmup_ratio']}",
         "--train_unet",
         "--train_text_encoder",
-        "--network_train_unet_only=0",
         "--mixed_precision=bf16",
         "--gradient_checkpointing",
         "--min_snr_gamma=5.0",
@@ -144,6 +143,9 @@ def build_command(
         f"--train_batch_size={resolved['train_batch_size']}",
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
+
+    if args.network_train_unet_only:
+        command.append("--network_train_unet_only")
 
     if args.seed is not None:
         command.append(f"--seed={args.seed}")
@@ -210,6 +212,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "Number of optimizer steps completed in the checkpoint specified with --resume. "
             "Overrides the value inferred from the checkpoint filename."
         ),
+    )
+
+    parser.add_argument(
+        "--network-train-unet-only",
+        action="store_true",
+        help="Disable text encoder network weights and train the UNet adapters only.",
     )
 
     # Optional overrides
