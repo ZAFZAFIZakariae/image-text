@@ -153,7 +153,6 @@ def build_command(
         f"--learning_rate={resolved['learning_rate']}",
         f"--text_encoder_lr={resolved['text_encoder_lr']}",
         "--optimizer_type=adamw8bit",
-        f"--weight_decay={resolved['weight_decay']}",
         f"--max_grad_norm={resolved['max_grad_norm']}",
         f"--lr_scheduler={resolved['lr_scheduler']}",
         "--mixed_precision=bf16",
@@ -170,6 +169,10 @@ def build_command(
         f"--train_batch_size={resolved['train_batch_size']}",
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
+
+    weight_decay = resolved.get("weight_decay")
+    if weight_decay not in (None, "None"):
+        command.extend(["--optimizer_args", f"weight_decay={weight_decay}"])
 
     warmup_steps = resolved.get("lr_warmup_steps")
     if warmup_steps is not None:
