@@ -33,7 +33,7 @@ DEFAULT_DATA_LOADER_SEED = 3407
 COMMON_DEFAULTS: Dict[str, str] = {
     "network_dim": "192",
     "network_alpha": "96",
-    "lora_dropout": "0.05",
+    "network_dropout": "0.05",
     "learning_rate": "1e-4",
     "text_encoder_lr": "5e-6",
     "weight_decay": "0.01",
@@ -78,13 +78,14 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
     for key in (
         "network_dim",
         "network_alpha",
-        "lora_dropout",
+        "network_dropout",
         "learning_rate",
         "text_encoder_lr",
         "weight_decay",
         "max_grad_norm",
         "lr_scheduler",
         "lr_warmup_ratio",
+        "lr_warmup_steps",
         "max_train_steps",
         "train_batch_size",
         "gradient_accumulation_steps",
@@ -94,6 +95,34 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
         value = getattr(args, key, None)
         if value is not None:
             resolved[key] = str(value)
+
+    if "network_dropout" not in resolved:
+        # Backward compatibility with older presets that still reference lora_dropout.
+        lora_dropout = resolved.pop("lora_dropout", None)
+        if lora_dropout is not None:
+            resolved["network_dropout"] = lora_dropout
+
+    resolved.pop("lora_dropout", None)
+
+    # Convert ratio-based warmup configuration to an explicit step count for
+    # the modern kohya_ss argument format.
+    warmup_steps = resolved.get("lr_warmup_steps")
+    if warmup_steps in (None, "None"):
+        ratio = resolved.get("lr_warmup_ratio")
+        try:
+            if ratio is not None:
+                warmup_steps = int(
+                    round(float(ratio) * int(resolved["max_train_steps"]))
+                )
+        except (ValueError, KeyError):
+            warmup_steps = None
+
+    if warmup_steps is not None:
+        resolved["lr_warmup_steps"] = str(int(warmup_steps))
+    else:
+        resolved.pop("lr_warmup_steps", None)
+
+    resolved.pop("lr_warmup_ratio", None)
 
     return resolved
 
@@ -107,10 +136,11 @@ def build_command(
         sys.executable,
         str(train_script),
         "--network_module=lycoris.kohya",
-        "--algo=locon_dora",
+        "--network_args",
+        "algo=locon_dora",
         f"--network_dim={resolved['network_dim']}",
         f"--network_alpha={resolved['network_alpha']}",
-        f"--lora_dropout={resolved['lora_dropout']}",
+        f"--network_dropout={resolved['network_dropout']}",
         f"--pretrained_model_name_or_path={args.base_model}",
         f"--train_data_dir={args.data_dir}",
         f"--caption_extension={args.caption_extension}",
@@ -126,9 +156,6 @@ def build_command(
         f"--weight_decay={resolved['weight_decay']}",
         f"--max_grad_norm={resolved['max_grad_norm']}",
         f"--lr_scheduler={resolved['lr_scheduler']}",
-        f"--lr_warmup_ratio={resolved['lr_warmup_ratio']}",
-        "--train_unet",
-        "--train_text_encoder",
         "--mixed_precision=bf16",
         "--gradient_checkpointing",
         "--min_snr_gamma=5.0",
@@ -144,8 +171,15 @@ def build_command(
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
 
+    warmup_steps = resolved.get("lr_warmup_steps")
+    if warmup_steps is not None:
+        command.append(f"--lr_warmup_steps={warmup_steps}")
+
     if args.network_train_unet_only:
         command.append("--network_train_unet_only")
+
+    if getattr(args, "network_train_text_encoder_only", False):
+        command.append("--network_train_text_encoder_only")
 
     if args.seed is not None:
         command.append(f"--seed={args.seed}")
@@ -219,18 +253,30 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Disable text encoder network weights and train the UNet adapters only.",
     )
+    parser.add_argument(
+        "--network-train-text-encoder-only",
+        action="store_true",
+        help="Disable UNet network weights and train the text encoder adapters only.",
+    )
+
+    parser.add_argument(
+        "--lora-dropout",
+        dest="network_dropout",
+        help="Deprecated alias for --network-dropout.",
+    )
 
     # Optional overrides
     for name in (
         "network_dim",
         "network_alpha",
-        "lora_dropout",
+        "network_dropout",
         "learning_rate",
         "text_encoder_lr",
         "weight_decay",
         "max_grad_norm",
         "lr_scheduler",
         "lr_warmup_ratio",
+        "lr_warmup_steps",
         "max_train_steps",
         "train_batch_size",
         "gradient_accumulation_steps",

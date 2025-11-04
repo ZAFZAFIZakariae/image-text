@@ -158,16 +158,15 @@ You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base 
    ```bash
    python -u /usr/local/lib/python3.10/dist-packages/kohya_ss/train_network.py \
      --network_module=lycoris.kohya \
-     --algo=locon_dora \
-     --network_dim=192 --network_alpha=96 --lora_dropout=0.05 \
+     --network_args "algo=locon_dora" \
+     --network_dim=192 --network_alpha=96 --network_dropout=0.05 \
      --pretrained_model_name_or_path="$BASE_MODEL" \
      --train_data_dir="$DATA_DIR" --caption_extension=".txt" \
      --resolution=1024 --min_bucket_reso=640 --max_bucket_reso=1024 --bucket_reso_steps=64 \
      --output_dir="$OUT_DIR" --output_name="realvisxl_locon_dora_full60k" \
      --learning_rate=1e-4 --text_encoder_lr=5e-6 \
      --optimizer_type=adamw8bit --weight_decay=0.01 --max_grad_norm=1.0 \
-     --lr_scheduler=cosine --lr_warmup_ratio=0.05 \
-    --train_unet --train_text_encoder \
+     --lr_scheduler=cosine --lr_warmup_steps=1000 \
      --mixed_precision=bf16 --gradient_checkpointing \
      --min_snr_gamma=5.0 --noise_offset=0.02 \
      --max_data_loader_n_workers=8 --persistent_data_loader_workers \
@@ -183,16 +182,15 @@ You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base 
    ```bash
    python -u /usr/local/lib/python3.10/dist-packages/kohya_ss/train_network.py \
      --network_module=lycoris.kohya \
-     --algo=locon_dora \
-     --network_dim=192 --network_alpha=96 --lora_dropout=0.05 \
+     --network_args "algo=locon_dora" \
+     --network_dim=192 --network_alpha=96 --network_dropout=0.05 \
      --pretrained_model_name_or_path="$BASE_MODEL" \
      --train_data_dir="$DATA_DIR" --caption_extension=".txt" \
      --resolution=1024 --min_bucket_reso=640 --max_bucket_reso=1024 --bucket_reso_steps=64 \
      --output_dir="$OUT_DIR" --output_name="realvisxl_locon_dora_full60k" \
      --learning_rate=1e-4 --text_encoder_lr=5e-6 \
      --optimizer_type=adamw8bit --weight_decay=0.01 --max_grad_norm=1.0 \
-     --lr_scheduler=cosine --lr_warmup_ratio=0.05 \
-    --train_unet --train_text_encoder \
+     --lr_scheduler=cosine --lr_warmup_steps=1000 \
      --mixed_precision=bf16 --gradient_checkpointing \
      --min_snr_gamma=5.0 --noise_offset=0.02 \
      --max_data_loader_n_workers=6 --persistent_data_loader_workers \
@@ -242,7 +240,7 @@ python train_realvis_locon_dora.py \
 
 Swap `--preset` to `T4` for the lower-memory schedule or add overrides such as `--max-train-steps 24000` or `--train-batch-size 1`. Pass `--dry-run` to print the composed `kohya_ss.train_network` invocation without launching it.
 
-LyCORIS trains both the UNet and text encoder adapters by default. If you need UNet-only adapters, remove `--train_text_encoder` from the manual command or pass `--network_train_unet_only` when invoking `train_network.py`. The helper script exposes the same behaviour via `--network-train-unet-only`.
+LyCORIS trains both the UNet and text encoder adapters by default. If you need UNet-only adapters, add `--network_train_unet_only`. To freeze the UNet and train only the text encoder adapters, pass `--network_train_text_encoder_only`.
 
 ## Running on Google Colab
 
