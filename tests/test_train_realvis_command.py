@@ -43,6 +43,12 @@ def test_command_includes_cache_latents_by_default():
     assert "--cache_latents_to_disk" in command
 
 
+def test_command_includes_multiple_cache_latents_flags():
+    command = build(cache_flag=("--cache_latents_to_disk", "--cache_latents"))
+    assert "--cache_latents_to_disk" in command
+    assert "--cache_latents" in command
+
+
 def test_parse_args_supports_allow_truncated_images_flag():
     args = make_args(["--allow-truncated-images"])
     assert args.allow_truncated_images is True
@@ -64,7 +70,7 @@ def test_detect_cache_latents_prefers_disk(tmp_path):
     train_script.write_text("cache_latents_to_disk")
 
     flag = detect_cache_latents_flag(train_script)
-    assert flag == "--cache_latents_to_disk"
+    assert flag == ("--cache_latents_to_disk",)
 
 
 def test_detect_cache_latents_falls_back_to_cache_latents(tmp_path):
@@ -72,7 +78,7 @@ def test_detect_cache_latents_falls_back_to_cache_latents(tmp_path):
     train_script.write_text("cache_latents\n")
 
     flag = detect_cache_latents_flag(train_script)
-    assert flag == "--cache_latents"
+    assert flag == ("--cache_latents",)
 
 
 def test_detect_cache_latents_handles_missing_flag(tmp_path):
@@ -81,3 +87,13 @@ def test_detect_cache_latents_handles_missing_flag(tmp_path):
 
     flag = detect_cache_latents_flag(train_script)
     assert flag is None
+
+
+def test_detect_cache_latents_returns_both_when_present(tmp_path):
+    train_script = tmp_path / "train_network.py"
+    train_script.write_text(
+        "--cache_latents_to_disk\n--cache_latents\n"
+    )
+
+    flag = detect_cache_latents_flag(train_script)
+    assert flag == ("--cache_latents_to_disk", "--cache_latents")

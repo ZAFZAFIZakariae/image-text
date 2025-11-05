@@ -13,7 +13,7 @@ import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,10 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
     return resolved
 
 
-def detect_cache_latents_flag(train_script: Path) -> Optional[str]:
+CacheLatentsFlags = Optional[Sequence[str]]
+
+
+def detect_cache_latents_flag(train_script: Path) -> CacheLatentsFlags:
     """Detect the appropriate cache latents CLI flag for ``train_network.py``.
 
     Historically Kohya exposed ``--cache_latents_to_disk`` while newer versions
@@ -141,22 +144,35 @@ def detect_cache_latents_flag(train_script: Path) -> Optional[str]:
     except OSError:
         # When the script cannot be inspected fall back to the legacy option
         # which matches the default behaviour prior to detection support.
-        return "--cache_latents_to_disk"
+        return ("--cache_latents_to_disk",)
 
-    if "cache_latents_to_disk" in script_text:
-        return "--cache_latents_to_disk"
+    has_cache_latents_to_disk = bool(
+        re.search(r"--cache_latents_to_disk", script_text)
+        or re.search(r"\bcache_latents_to_disk\b", script_text)
+    )
+    has_cache_latents = bool(
+        re.search(r"--cache_latents(?!_to_disk)", script_text)
+        or re.search(r"\bcache_latents\b", script_text)
+    )
 
-    if "cache_latents" in script_text:
-        return "--cache_latents"
+    flags: Tuple[str, ...]
+    if has_cache_latents_to_disk and has_cache_latents:
+        flags = ("--cache_latents_to_disk", "--cache_latents")
+    elif has_cache_latents_to_disk:
+        flags = ("--cache_latents_to_disk",)
+    elif has_cache_latents:
+        flags = ("--cache_latents",)
+    else:
+        return None
 
-    return None
+    return flags
 
 
 def build_command(
     args: argparse.Namespace,
     resolved: Dict[str, str],
     train_script: Path,
-    cache_latents_flag: Optional[str] = "--cache_latents_to_disk",
+    cache_latents_flag: Optional[Union[str, Sequence[str]]] = ("--cache_latents_to_disk",),
 ) -> List[str]:
     """Assemble the kohya_ss command from CLI arguments."""
 
@@ -197,8 +213,14 @@ def build_command(
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
 
-    if cache_latents_flag and not args.no_cache_latents_to_disk:
-        command.append(cache_latents_flag)
+    cache_flags: List[str] = []
+    if isinstance(cache_latents_flag, str):
+        cache_flags = [cache_latents_flag]
+    elif cache_latents_flag:
+        cache_flags = list(cache_latents_flag)
+
+    if cache_flags and not args.no_cache_latents_to_disk:
+        command.extend(cache_flags)
 
     weight_decay = resolved.get("weight_decay")
     if weight_decay not in (None, "None"):
