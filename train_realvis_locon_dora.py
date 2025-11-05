@@ -30,6 +30,12 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 DEFAULT_DATA_LOADER_SEED = 3407
 
 
+def log_step(message: str) -> None:
+    """Emit a progress message that flushes immediately."""
+
+    print(f"[train_realvis] {message}", flush=True)
+
+
 COMMON_DEFAULTS: Dict[str, str] = {
     "network_dim": "192",
     "network_alpha": "96",
@@ -178,6 +184,7 @@ def build_command(
 
     command = [
         sys.executable,
+        "-u",
         str(train_script),
         "--network_module=lycoris.kohya",
         "--network_args",
@@ -586,6 +593,9 @@ def collect_dataset_entries(data_dir: Path, caption_extension: str) -> List[Path
         )
 
     images.sort()
+    log_step(
+        f"Discovered {len(images)} training images with captions in {data_dir}."
+    )
     return images
 
 
@@ -666,6 +676,8 @@ def prepare_dataloader_state(
     with state_path.open("w", encoding="utf-8") as fh:
         json.dump(state_payload, fh)
 
+    log_step(f"Wrote DataLoader state to {state_path}.")
+
     if skip_samples_once:
         print(
             f"DataLoader resume: skipping the first {skip_samples_once} samples "
@@ -673,7 +685,7 @@ def prepare_dataloader_state(
             file=sys.stderr,
         )
 
-    print(f"DataLoader seed fixed at {seed} for deterministic ordering.")
+    print(f"DataLoader seed fixed at {seed} for deterministic ordering.", flush=True)
 
     return DataLoaderState(state_path, seed, skip_samples_once, dataset_size)
 
@@ -681,24 +693,37 @@ def prepare_dataloader_state(
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
+    log_step("Checking for required dependencies (kohya_ss, lycoris)...")
     ensure_dependencies(args)
+
+    log_step("Validating base model, dataset, and output directories...")
     ensure_directories(args)
+
+    log_step(f"Resolving training configuration for preset '{args.preset}'...")
     resolved = resolve_training_config(args)
 
     loader_state = prepare_dataloader_state(args, resolved)
     if loader_state is not None:
         args.seed = loader_state.seed
+        log_step(
+            f"DataLoader deterministic state prepared (seed={loader_state.seed}, "
+            f"dataset_size={loader_state.dataset_size})."
+        )
+    else:
+        log_step("DataLoader deterministic state disabled or unavailable.")
 
     train_script = resolve_kohya_train_script()
+    log_step(f"Resolved kohya_ss training script at {train_script}.")
     cache_latents_flag = detect_cache_latents_flag(train_script)
 
     command = build_command(args, resolved, train_script, cache_latents_flag)
 
     printable = " ".join(shlex.quote(token) for token in command)
-    print("Running:")
-    print(printable)
+    log_step("Launching kohya_ss training command:")
+    print(printable, flush=True)
 
     if args.dry_run:
+        log_step("Dry run requested; exiting before launching kohya_ss.")
         return 0
 
     env = os.environ.copy()
@@ -725,7 +750,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             combined.append(existing_pythonpath)
         env["PYTHONPATH"] = ":".join(combined)
 
+    log_step("Starting kohya_ss training subprocess...")
     process = subprocess.run(command, env=env)
+    log_step(f"kohya_ss subprocess exited with return code {process.returncode}.")
+    if process.returncode != 0:
+        print(
+            "The training command exited abnormally. Re-run with --dry-run to inspect the "
+            "assembled command or execute the printed command manually for more details.",
+            file=sys.stderr,
+            flush=True,
+        )
     return process.returncode
 
 
