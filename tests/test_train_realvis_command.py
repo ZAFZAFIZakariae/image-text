@@ -43,6 +43,11 @@ def test_command_includes_cache_latents_by_default():
     assert "--cache_latents_to_disk" in command
 
 
+def test_parse_args_supports_allow_truncated_images_flag():
+    args = make_args(["--allow-truncated-images"])
+    assert args.allow_truncated_images is True
+
+
 def test_command_omits_cache_latents_when_disabled():
     command = build(["--no-cache-latents-to-disk"])
     assert "--cache_latents_to_disk" not in command
