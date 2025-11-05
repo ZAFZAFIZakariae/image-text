@@ -127,8 +127,36 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
     return resolved
 
 
+def detect_cache_latents_flag(train_script: Path) -> Optional[str]:
+    """Detect the appropriate cache latents CLI flag for ``train_network.py``.
+
+    Historically Kohya exposed ``--cache_latents_to_disk`` while newer versions
+    renamed the option to ``--cache_latents``. Reading the training script avoids
+    passing a flag that is no longer recognised, which would otherwise abort the
+    launch with an ``unrecognized arguments`` error.
+    """
+
+    try:
+        script_text = train_script.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        # When the script cannot be inspected fall back to the legacy option
+        # which matches the default behaviour prior to detection support.
+        return "--cache_latents_to_disk"
+
+    if "cache_latents_to_disk" in script_text:
+        return "--cache_latents_to_disk"
+
+    if "cache_latents" in script_text:
+        return "--cache_latents"
+
+    return None
+
+
 def build_command(
-    args: argparse.Namespace, resolved: Dict[str, str], train_script: Path
+    args: argparse.Namespace,
+    resolved: Dict[str, str],
+    train_script: Path,
+    cache_latents_flag: Optional[str] = "--cache_latents_to_disk",
 ) -> List[str]:
     """Assemble the kohya_ss command from CLI arguments."""
 
@@ -169,8 +197,8 @@ def build_command(
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
 
-    if not args.no_cache_latents_to_disk:
-        command.append("--cache_latents_to_disk")
+    if cache_latents_flag and not args.no_cache_latents_to_disk:
+        command.append(cache_latents_flag)
 
     weight_decay = resolved.get("weight_decay")
     if weight_decay not in (None, "None"):
@@ -632,8 +660,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.seed = loader_state.seed
 
     train_script = resolve_kohya_train_script()
+    cache_latents_flag = detect_cache_latents_flag(train_script)
 
-    command = build_command(args, resolved, train_script)
+    command = build_command(args, resolved, train_script, cache_latents_flag)
 
     printable = " ".join(shlex.quote(token) for token in command)
     print("Running:")
