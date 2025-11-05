@@ -201,7 +201,7 @@ You can reproduce the Colab workflow below to fine-tune the `realvisxl-v5` base 
      --train_batch_size=1 --gradient_accumulation_steps=8
    ```
 
-`--cache_latents_to_disk` keeps long runs stable on Colab. Monitor the quality of intermediate checkpoints (saved every 1,000 steps) and stop early if your results plateau—many 60k-image runs converge between 16k and 24k steps. Keep both EMA and non-EMA outputs if you plan to perform a full fine-tune later.
+`--cache_latents_to_disk` keeps long runs stable on Colab. Monitor the quality of intermediate checkpoints (saved every 1,000 steps) and stop early if your results plateau—many 60k-image runs converge between 16k and 24k steps. Keep both EMA and non-EMA outputs if you plan to perform a full fine-tune later. When scratch space is tight or you are using an older Kohya build that lacks disk caching, launch the helper with `--no-cache-latents-to-disk` to drop the flag.
 
 ### Resuming LyCORIS runs and controlling DataLoader order
 

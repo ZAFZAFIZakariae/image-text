@@ -161,7 +161,6 @@ def build_command(
         "--noise_offset=0.02",
         f"--max_data_loader_n_workers={resolved['max_data_loader_n_workers']}",
         "--persistent_data_loader_workers",
-        "--cache_latents_to_disk",
         "--save_every_n_steps=1000",
         "--save_model_as=safetensors",
         f"--log_prefix={resolved['log_prefix']}",
@@ -169,6 +168,9 @@ def build_command(
         f"--train_batch_size={resolved['train_batch_size']}",
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
+
+    if not args.no_cache_latents_to_disk:
+        command.append("--cache_latents_to_disk")
 
     weight_decay = resolved.get("weight_decay")
     if weight_decay not in (None, "None"):
@@ -292,6 +294,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Print the computed command without executing it",
+    )
+    parser.add_argument(
+        "--no-cache-latents-to-disk",
+        action="store_true",
+        help=(
+            "Skip adding --cache_latents_to_disk to the kohya_ss command. "
+            "Disable this when temporary storage is limited or the option is not available."
+        ),
     )
     parser.add_argument(
         "--disable-dataloader-state",
