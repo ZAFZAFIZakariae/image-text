@@ -115,7 +115,16 @@ def _patch_huggingface_hub_cached_download() -> None:
 
     compat_fn = getattr(file_download, "cached_download", None)
     if compat_fn is None:
-        return
+        hf_hub_download = getattr(file_download, "hf_hub_download", None)
+        if hf_hub_download is None:
+            return
+
+        def compat_cached_download(*args, **kwargs):
+            """Compatibility wrapper that defers to ``hf_hub_download``."""
+
+            return hf_hub_download(*args, **kwargs)
+
+        compat_fn = compat_cached_download
 
     huggingface_hub.cached_download = compat_fn  # type: ignore[attr-defined]
 
