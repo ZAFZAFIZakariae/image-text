@@ -161,7 +161,6 @@ def build_command(
         "--noise_offset=0.02",
         f"--max_data_loader_n_workers={resolved['max_data_loader_n_workers']}",
         "--persistent_data_loader_workers",
-        "--cache_latents_to_disk",
         "--save_every_n_steps=1000",
         "--save_model_as=safetensors",
         f"--log_prefix={resolved['log_prefix']}",
@@ -169,6 +168,12 @@ def build_command(
         f"--train_batch_size={resolved['train_batch_size']}",
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
+
+    cache_mode = getattr(args, "cache_latents", "disk")
+    if cache_mode == "ram":
+        command.append("--cache_latents")
+    elif cache_mode == "disk":
+        command.append("--cache_latents_to_disk")
 
     weight_decay = resolved.get("weight_decay")
     if weight_decay not in (None, "None"):
@@ -292,6 +297,33 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Print the computed command without executing it",
+    )
+
+    parser.set_defaults(cache_latents="disk")
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument(
+        "--cache-latents",
+        dest="cache_latents",
+        action="store_const",
+        const="ram",
+        help=(
+            "Enable in-memory latent caching. Recommended when enough RAM is available "
+            "to avoid disk thrashing."
+        ),
+    )
+    cache_group.add_argument(
+        "--cache-latents-to-disk",
+        dest="cache_latents",
+        action="store_const",
+        const="disk",
+        help="Cache latents to disk (default).",
+    )
+    cache_group.add_argument(
+        "--no-cache-latents",
+        dest="cache_latents",
+        action="store_const",
+        const="none",
+        help="Disable latent caching entirely.",
     )
     parser.add_argument(
         "--disable-dataloader-state",
