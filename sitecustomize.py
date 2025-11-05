@@ -85,7 +85,21 @@ def _patch_random_sampler(seed: Optional[int], skip_once: int) -> None:
     RandomSampler.__iter__ = iterator_with_resume  # type: ignore[assignment]
 
 
+def _enable_truncated_images() -> None:
+    if not os.environ.get("IMAGETEXT_ALLOW_TRUNCATED_IMAGES"):
+        return
+
+    try:
+        from PIL import ImageFile  # type: ignore
+    except Exception:  # pragma: no cover - Pillow may be absent in unit tests
+        return
+
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
 def _install() -> None:
+    _enable_truncated_images()
+
     state = _load_state()
     if not state or not state.get("enabled", False):
         return

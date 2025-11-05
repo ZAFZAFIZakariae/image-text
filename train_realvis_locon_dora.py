@@ -340,6 +340,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--allow-truncated-images",
+        action="store_true",
+        help=(
+            "Enable PIL's LOAD_TRUNCATED_IMAGES flag so that partially downloaded or "
+            "otherwise truncated images do not abort latent caching."
+        ),
+    )
+    parser.add_argument(
         "--additional-argument",
         action="append",
         metavar="ARG",
@@ -673,10 +681,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     env = os.environ.copy()
 
-    pythonpath_entries: List[str] = []
+    needs_sitecustomize = loader_state is not None or args.allow_truncated_images
 
     if loader_state is not None:
         env["IMAGETEXT_DATA_LOADER_STATE"] = str(loader_state.path)
+
+    if args.allow_truncated_images:
+        env["IMAGETEXT_ALLOW_TRUNCATED_IMAGES"] = "1"
+
+    pythonpath_entries: List[str] = []
+
+    if needs_sitecustomize:
         pythonpath_entries.append(str(Path(__file__).resolve().parent))
 
     pythonpath_entries.extend(_ADDED_DEPENDENCY_PATHS)
