@@ -97,8 +97,36 @@ def _enable_truncated_images() -> None:
     ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
+def _patch_huggingface_hub_cached_download() -> None:
+    """Restore ``cached_download`` symbol for newer ``huggingface_hub`` releases."""
+
+    try:
+        import huggingface_hub  # type: ignore
+    except Exception:  # pragma: no cover - dependency is optional during tests
+        return
+
+    if getattr(huggingface_hub, "cached_download", None) is not None:
+        return
+
+    try:
+        from huggingface_hub import file_download  # type: ignore
+    except Exception:  # pragma: no cover - module layout may differ in tests
+        return
+
+    compat_fn = getattr(file_download, "cached_download", None)
+    if compat_fn is None:
+        return
+
+    huggingface_hub.cached_download = compat_fn  # type: ignore[attr-defined]
+
+    exported = getattr(huggingface_hub, "__all__", None)
+    if isinstance(exported, (list, tuple)) and "cached_download" not in exported:
+        huggingface_hub.__all__ = tuple(exported) + ("cached_download",)
+
+
 def _install() -> None:
     _enable_truncated_images()
+    _patch_huggingface_hub_cached_download()
 
     state = _load_state()
     if not state or not state.get("enabled", False):
