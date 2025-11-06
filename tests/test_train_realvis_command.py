@@ -8,6 +8,7 @@ from train_realvis_locon_dora import (
     build_command,
     detect_cache_latents_flag,
     ensure_accelerate_config,
+    evaluate_cache_latents_policy,
     parse_args,
     resolve_training_config,
 )
@@ -56,6 +57,11 @@ def test_parse_args_supports_allow_truncated_images_flag():
     assert args.allow_truncated_images is True
 
 
+def test_parse_args_supports_cache_latents_threshold():
+    args = make_args(["--cache-latents-skip-threshold", "1000"])
+    assert args.cache_latents_skip_threshold == 1000
+
+
 def test_command_omits_cache_latents_when_disabled():
     command = build(["--no-cache-latents-to-disk"])
     assert "--cache_latents_to_disk" not in command
@@ -75,6 +81,26 @@ def test_command_includes_mixed_precision_setting():
 def test_command_allows_mixed_precision_override():
     command = build(["--mixed-precision", "fp16"])
     assert "--mixed_precision=fp16" in command
+
+
+def test_evaluate_cache_latents_policy_disables_large_dataset():
+    args = parse_args(list(MINIMAL_ARGS))
+    should_cache, message = evaluate_cache_latents_policy(
+        args, 25000, ("--cache_latents_to_disk",)
+    )
+    assert should_cache is False
+    assert message is not None
+    assert "25000" in message
+    assert "auto-disable threshold" in message
+
+
+def test_evaluate_cache_latents_policy_respects_force_override():
+    args = parse_args(list(MINIMAL_ARGS) + ["--force-cache-latents"])
+    should_cache, message = evaluate_cache_latents_policy(
+        args, 50000, ("--cache_latents_to_disk",)
+    )
+    assert should_cache is True
+    assert message is None
 
 
 def _write_script(tmp_path, body: str) -> Path:
