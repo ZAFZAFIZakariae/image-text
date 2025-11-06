@@ -65,35 +65,83 @@ def test_command_uses_cache_latents_flag_when_specified():
     assert "--cache_latents_to_disk" not in command
 
 
+def _write_script(tmp_path, body: str) -> Path:
+    train_script = tmp_path / "train_network.py"
+    train_script.write_text(body, encoding="utf-8")
+    return train_script
+
+
 def test_detect_cache_latents_prefers_disk(tmp_path):
     train_script = tmp_path / "train_network.py"
-    train_script.write_text("cache_latents_to_disk")
+    train_script.write_text(
+        """
+from argparse import ArgumentParser
+
+
+def build_parser() -> ArgumentParser:
+    parser = ArgumentParser()
+    parser.add_argument("--cache_latents_to_disk", action="store_true")
+    return parser
+""",
+        encoding="utf-8",
+    )
 
     flag = detect_cache_latents_flag(train_script)
     assert flag == ("--cache_latents_to_disk",)
 
 
 def test_detect_cache_latents_falls_back_to_cache_latents(tmp_path):
-    train_script = tmp_path / "train_network.py"
-    train_script.write_text("cache_latents\n")
+    train_script = _write_script(
+        tmp_path,
+        """
+from argparse import ArgumentParser
+
+
+parser = ArgumentParser()
+parser.add_argument("--cache_latents", action="store_true")
+""",
+    )
 
     flag = detect_cache_latents_flag(train_script)
     assert flag == ("--cache_latents",)
 
 
 def test_detect_cache_latents_handles_missing_flag(tmp_path):
-    train_script = tmp_path / "train_network.py"
-    train_script.write_text("print('hello world')\n")
+    train_script = _write_script(tmp_path, "print('hello world')\n")
 
     flag = detect_cache_latents_flag(train_script)
     assert flag is None
 
 
 def test_detect_cache_latents_returns_both_when_present(tmp_path):
-    train_script = tmp_path / "train_network.py"
-    train_script.write_text(
-        "--cache_latents_to_disk\n--cache_latents\n"
+    train_script = _write_script(
+        tmp_path,
+        """
+from argparse import ArgumentParser
+
+
+parser = ArgumentParser()
+parser.add_argument("--cache_latents_to_disk", action="store_true")
+parser.add_argument("--cache_latents", action="store_true")
+""",
     )
 
     flag = detect_cache_latents_flag(train_script)
     assert flag == ("--cache_latents_to_disk", "--cache_latents")
+
+
+def test_detect_cache_latents_ignores_comments(tmp_path):
+    train_script = _write_script(
+        tmp_path,
+        """
+from argparse import ArgumentParser
+
+
+parser = ArgumentParser()
+# parser.add_argument("--cache_latents_to_disk", action="store_true")
+parser.add_argument("--cache_latents", action="store_true")
+""",
+    )
+
+    flag = detect_cache_latents_flag(train_script)
+    assert flag == ("--cache_latents",)
