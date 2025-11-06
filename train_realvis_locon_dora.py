@@ -12,6 +12,8 @@ import shlex
 import subprocess
 import sys
 import textwrap
+import hashlib
+import shutil
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -786,6 +788,78 @@ def collect_dataset_entries(data_dir: Path, caption_extension: str) -> List[Path
     return images
 
 
+def ensure_dreambooth_train_root(
+    data_dir: Path, images: Sequence[Path], output_dir: Path
+) -> Path:
+    """Ensure ``train_data_dir`` satisfies kohya_ss DreamBooth expectations.
+
+    kohya_ss' DreamBooth loader requires that ``train_data_dir`` is the parent
+    directory of one or more *subdirectories* that contain image files. Many
+    community datasets flatten the structure and place images directly under
+    ``data_dir`` itself, which leads kohya_ss to abort with "No data found"
+    errors.  When that layout is detected we fabricate a lightweight wrapper
+    directory containing a symlink that points back to the real dataset so
+    kohya_ss sees an instance folder without the caller needing to move files.
+    """
+
+    resolved_root = data_dir.resolve()
+
+    def _has_concept_folder(image_path: Path) -> bool:
+        try:
+            relative_parts = image_path.resolve().relative_to(resolved_root).parts
+        except Exception:
+            return True
+        return len(relative_parts) >= 2
+
+    if any(_has_concept_folder(path) for path in images):
+        return data_dir
+
+    wrapper_root = output_dir.resolve() / ".imagetext_dreambooth"
+    wrapper_root.mkdir(parents=True, exist_ok=True)
+
+    dataset_hash = hashlib.sha1(str(resolved_root).encode("utf-8")).hexdigest()[:10]
+    wrapper_dir = wrapper_root / f"{resolved_root.name}_{dataset_hash}"
+    wrapper_dir.mkdir(parents=True, exist_ok=True)
+
+    instance_dir = wrapper_dir / "instance_data"
+    target = resolved_root
+
+    if instance_dir.exists() or instance_dir.is_symlink():
+        try:
+            if instance_dir.is_symlink() and instance_dir.resolve() == target:
+                return wrapper_dir
+        except OSError:
+            pass
+
+        if instance_dir.is_symlink():
+            instance_dir.unlink()
+        elif instance_dir.is_dir():
+            shutil.rmtree(instance_dir)
+        else:
+            instance_dir.unlink()
+
+    try:
+        instance_dir.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        raise RuntimeError(
+            textwrap.dedent(
+                """
+                Unable to create a DreamBooth wrapper directory for the dataset. kohya_ss
+                expects --train_data_dir to contain subdirectories with images. Please
+                organise your dataset so that {root} has at least one child folder with
+                images (for example: {root}/instance/your_images.jpg) and re-run the
+                training script.
+                """
+            ).strip().format(root=resolved_root)
+        ) from exc
+
+    log_step(
+        "Dataset {} contains images directly; created DreamBooth wrapper {} "
+        "so kohya_ss can discover them.".format(resolved_root, wrapper_dir)
+    )
+    return wrapper_dir
+
+
 def evaluate_cache_latents_policy(
     args: argparse.Namespace,
     dataset_size: int,
@@ -933,6 +1007,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError(
             "No training images with matching captions were found in the dataset directory."
         )
+
+    train_data_root = ensure_dreambooth_train_root(
+        data_dir_path, dataset_images, Path(args.output_dir)
+    )
+    if train_data_root != data_dir_path:
+        args.data_dir = str(train_data_root)
+        data_dir_path = train_data_root
 
     loader_state = prepare_dataloader_state(args, resolved, dataset_images)
     if loader_state is not None:
