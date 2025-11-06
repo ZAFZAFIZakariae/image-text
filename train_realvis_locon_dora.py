@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import textwrap
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -1022,16 +1023,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         env["PYTHONPATH"] = ":".join(combined)
 
     log_step("Starting kohya_ss training subprocess...")
-    process = subprocess.run(command, env=env)
-    log_step(f"kohya_ss subprocess exited with return code {process.returncode}.")
-    if process.returncode != 0:
+
+    process = subprocess.Popen(
+        command,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    tail = deque(maxlen=200)
+
+    assert process.stdout is not None
+
+    try:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            tail.append(line.rstrip("\n"))
+    finally:
+        process.stdout.close()
+
+    process.wait()
+
+    return_code = process.returncode or 0
+    log_step(f"kohya_ss subprocess exited with return code {return_code}.")
+
+    if return_code != 0:
+        if return_code < 0:
+            log_step(
+                "kohya_ss subprocess terminated by signal {}.".format(-return_code)
+            )
+
+        if tail:
+            preview_lines = list(tail)[-20:]
+            log_step(
+                "Captured the final {} line(s) of kohya_ss output to aid debugging:".format(
+                    len(preview_lines)
+                )
+            )
+            for entry in preview_lines:
+                print(f"    {entry}")
+
         print(
             "The training command exited abnormally. Re-run with --dry-run to inspect the "
             "assembled command or execute the printed command manually for more details.",
             file=sys.stderr,
             flush=True,
         )
-    return process.returncode
+
+    return return_code
 
 
 if __name__ == "__main__":
