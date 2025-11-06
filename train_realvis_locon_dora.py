@@ -29,6 +29,7 @@ class Preset:
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 DEFAULT_DATA_LOADER_SEED = 3407
+MIXED_PRECISION_MODE = "bf16"
 
 
 def log_step(message: str) -> None:
@@ -52,6 +53,7 @@ COMMON_DEFAULTS: Dict[str, str] = {
     "gradient_accumulation_steps": "4",
     "max_data_loader_n_workers": "8",
     "log_prefix": "L4_full60k",
+    "mixed_precision": MIXED_PRECISION_MODE,
 }
 
 
@@ -98,6 +100,7 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
         "gradient_accumulation_steps",
         "max_data_loader_n_workers",
         "log_prefix",
+        "mixed_precision",
     ):
         value = getattr(args, key, None)
         if value is not None:
@@ -251,7 +254,7 @@ def build_command(
         "--optimizer_type=adamw8bit",
         f"--max_grad_norm={resolved['max_grad_norm']}",
         f"--lr_scheduler={resolved['lr_scheduler']}",
-        "--mixed_precision=bf16",
+        f"--mixed_precision={resolved['mixed_precision']}",
         "--gradient_checkpointing",
         "--min_snr_gamma=5.0",
         "--noise_offset=0.02",
@@ -389,6 +392,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "gradient_accumulation_steps",
         "max_data_loader_n_workers",
         "log_prefix",
+        "mixed_precision",
     ):
         parser.add_argument(f"--{name.replace('_', '-')}", dest=name)
 
@@ -573,6 +577,42 @@ def ensure_dependencies(_: argparse.Namespace) -> None:
         raise ModuleNotFoundError(_format_missing_dependency_hint(missing))
 
 
+def ensure_accelerate_config(resolved: Dict[str, str]) -> None:
+    """Ensure Accelerate has a default config so training can launch unattended."""
+
+    try:
+        from accelerate.commands.config import default_config_file
+        from accelerate.utils import write_basic_config
+    except Exception:
+        return
+
+    config_path = Path(default_config_file)
+    if config_path.exists():
+        return
+
+    mixed_precision = resolved.get("mixed_precision", MIXED_PRECISION_MODE)
+
+    try:
+        write_basic_config(
+            mixed_precision=mixed_precision,
+            save_location=str(config_path),
+        )
+    except Exception as exc:  # pragma: no cover - best-effort setup
+        print(
+            "Warning: Unable to create Accelerate default config at {}: {}".format(
+                config_path, exc
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        log_step(
+            "Initialised Accelerate default config at {} (mixed_precision={}).".format(
+                config_path, mixed_precision
+            )
+        )
+
+
 def resolve_kohya_train_script() -> Path:
     """Return the filesystem path to ``train_network.py`` inside ``kohya_ss``."""
 
@@ -746,6 +786,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     log_step(f"Resolving training configuration for preset '{args.preset}'...")
     resolved = resolve_training_config(args)
+
+    ensure_accelerate_config(resolved)
 
     loader_state = prepare_dataloader_state(args, resolved)
     if loader_state is not None:

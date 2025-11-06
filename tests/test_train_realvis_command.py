@@ -1,4 +1,5 @@
 import sys
+import types
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -6,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from train_realvis_locon_dora import (
     build_command,
     detect_cache_latents_flag,
+    ensure_accelerate_config,
     parse_args,
     resolve_training_config,
 )
@@ -63,6 +65,16 @@ def test_command_uses_cache_latents_flag_when_specified():
     command = build(cache_flag="--cache_latents")
     assert "--cache_latents" in command
     assert "--cache_latents_to_disk" not in command
+
+
+def test_command_includes_mixed_precision_setting():
+    command = build()
+    assert "--mixed_precision=bf16" in command
+
+
+def test_command_allows_mixed_precision_override():
+    command = build(["--mixed-precision", "fp16"])
+    assert "--mixed_precision=fp16" in command
 
 
 def _write_script(tmp_path, body: str) -> Path:
@@ -145,3 +157,37 @@ parser.add_argument("--cache_latents", action="store_true")
 
     flag = detect_cache_latents_flag(train_script)
     assert flag == ("--cache_latents",)
+
+
+def test_ensure_accelerate_config_creates_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "accelerate" / "default_config.yaml"
+    recorded: dict[str, str] = {}
+
+    accelerate_module = types.ModuleType("accelerate")
+    commands_module = types.ModuleType("accelerate.commands")
+    config_module = types.ModuleType("accelerate.commands.config")
+    utils_module = types.ModuleType("accelerate.utils")
+
+    config_module.default_config_file = str(config_path)
+
+    def fake_write_basic_config(*, mixed_precision="no", save_location: str) -> None:
+        recorded["mixed_precision"] = mixed_precision
+        recorded["save_location"] = save_location
+        Path(save_location).parent.mkdir(parents=True, exist_ok=True)
+        Path(save_location).write_text("config", encoding="utf-8")
+
+    utils_module.write_basic_config = fake_write_basic_config
+
+    accelerate_module.commands = commands_module
+    accelerate_module.utils = utils_module
+    commands_module.config = config_module
+
+    monkeypatch.setitem(sys.modules, "accelerate", accelerate_module)
+    monkeypatch.setitem(sys.modules, "accelerate.commands", commands_module)
+    monkeypatch.setitem(sys.modules, "accelerate.commands.config", config_module)
+    monkeypatch.setitem(sys.modules, "accelerate.utils", utils_module)
+
+    ensure_accelerate_config({"mixed_precision": "bf16"})
+
+    assert recorded["mixed_precision"] == "bf16"
+    assert Path(recorded["save_location"]).exists()
