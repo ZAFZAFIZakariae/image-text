@@ -716,6 +716,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     log_step(f"Resolved kohya_ss training script at {train_script}.")
     cache_latents_flag = detect_cache_latents_flag(train_script)
 
+    def _normalise_flags(flag: CacheLatentsFlags) -> Sequence[str]:
+        if not flag:
+            return ()
+        if isinstance(flag, str):
+            return (flag,)
+        return tuple(flag)
+
+    cache_flag_tokens = _normalise_flags(cache_latents_flag)
+    if cache_flag_tokens and not args.no_cache_latents_to_disk:
+        flags_display = ", ".join(cache_flag_tokens)
+        log_step(
+            "Latent caching enabled ({}). Kohya will pre-compute .npz files inside {} "
+            "or its 'latents' subdirectory before training logs appear.".format(
+                flags_display, args.data_dir
+            )
+        )
+    elif cache_flag_tokens:
+        flags_display = ", ".join(cache_flag_tokens)
+        log_step(
+            "Detected kohya_ss cache flag(s) ({}), but --no-cache-latents-to-disk was "
+            "requested so latents will be encoded on the fly.".format(flags_display)
+        )
+    else:
+        log_step(
+            "kohya_ss version does not expose a cache-latents flag; trainer will encode "
+            "latents on the fly."
+        )
+
     command = build_command(args, resolved, train_script, cache_latents_flag)
 
     printable = " ".join(shlex.quote(token) for token in command)
