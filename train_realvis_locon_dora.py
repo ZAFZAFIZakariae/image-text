@@ -245,6 +245,8 @@ def build_command(
         f"--network_dim={resolved['network_dim']}",
         f"--network_alpha={resolved['network_alpha']}",
         f"--network_dropout={resolved['network_dropout']}",
+        "--sdxl",
+        "--v2",
         f"--pretrained_model_name_or_path={args.base_model}",
         f"--train_data_dir={args.data_dir}",
         f"--caption_extension={args.caption_extension}",
