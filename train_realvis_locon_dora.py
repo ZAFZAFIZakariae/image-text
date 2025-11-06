@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+import ast
 import re
 import shlex
 import subprocess
@@ -136,6 +137,48 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
 CacheLatentsFlags = Optional[Sequence[str]]
 
 
+def _extract_cache_flags(script_text: str) -> Tuple[bool, bool] | None:
+    """Return availability of cache flags via AST inspection.
+
+    ``train_network.py`` is large and occasionally changes how it documents
+    command line arguments. Earlier versions referenced ``--cache_latents`` in
+    comments even though the option itself was removed, which tricked a plain
+    string search into assuming the flag still existed. By walking the AST and
+    checking for real ``add_argument`` calls we can confirm that an option is
+    genuinely registered with ``argparse``.
+    """
+
+    try:
+        tree = ast.parse(script_text)
+    except SyntaxError:
+        return None
+
+    has_cache_latents_to_disk = False
+    has_cache_latents = False
+
+    class _ArgumentVisitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 - argparse API
+            nonlocal has_cache_latents_to_disk, has_cache_latents
+
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr != "add_argument":
+                self.generic_visit(node)
+                return
+
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if arg.value == "--cache_latents_to_disk":
+                        has_cache_latents_to_disk = True
+                    elif arg.value == "--cache_latents":
+                        has_cache_latents = True
+
+            self.generic_visit(node)
+
+    _ArgumentVisitor().visit(tree)
+
+    return has_cache_latents_to_disk, has_cache_latents
+
+
 def detect_cache_latents_flag(train_script: Path) -> CacheLatentsFlags:
     """Detect the appropriate cache latents CLI flag for ``train_network.py``.
 
@@ -152,14 +195,16 @@ def detect_cache_latents_flag(train_script: Path) -> CacheLatentsFlags:
         # which matches the default behaviour prior to detection support.
         return ("--cache_latents_to_disk",)
 
-    has_cache_latents_to_disk = bool(
-        re.search(r"--cache_latents_to_disk", script_text)
-        or re.search(r"\bcache_latents_to_disk\b", script_text)
-    )
-    has_cache_latents = bool(
-        re.search(r"--cache_latents(?!_to_disk)", script_text)
-        or re.search(r"\bcache_latents\b", script_text)
-    )
+    extracted = _extract_cache_flags(script_text)
+    if extracted is None:
+        has_cache_latents_to_disk = bool(
+            re.search(r"add_argument\([^#\n]*--cache_latents_to_disk", script_text)
+        )
+        has_cache_latents = bool(
+            re.search(r"add_argument\([^#\n]*--cache_latents(?!_to_disk)", script_text)
+        )
+    else:
+        has_cache_latents_to_disk, has_cache_latents = extracted
 
     flags: Tuple[str, ...]
     if has_cache_latents_to_disk and has_cache_latents:
