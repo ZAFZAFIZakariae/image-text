@@ -247,6 +247,7 @@ def build_command(
         f"--network_dropout={resolved['network_dropout']}",
         f"--pretrained_model_name_or_path={args.base_model}",
         f"--train_data_dir={args.data_dir}",
+        "--sdxl",
         f"--caption_extension={args.caption_extension}",
         "--resolution=1024",
         "--min_bucket_reso=640",
