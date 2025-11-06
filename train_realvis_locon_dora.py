@@ -434,6 +434,24 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--force-cache-latents",
+        action="store_true",
+        help=(
+            "Always include kohya_ss latent caching flags even when the dataset is large."
+        ),
+    )
+    parser.add_argument(
+        "--cache-latents-skip-threshold",
+        type=int,
+        default=20000,
+        metavar="N",
+        help=(
+            "Automatically disable latent caching when at least N captioned images are detected. "
+            "Set to 0 to keep caching enabled regardless of dataset size."
+        ),
+    )
+
     return parser.parse_args(argv)
 
 
@@ -684,6 +702,33 @@ def collect_dataset_entries(data_dir: Path, caption_extension: str) -> List[Path
     return images
 
 
+def evaluate_cache_latents_policy(
+    args: argparse.Namespace,
+    dataset_size: int,
+    cache_latents_flag: CacheLatentsFlags,
+) -> Tuple[bool, Optional[str]]:
+    """Determine whether kohya latent caching should remain enabled."""
+
+    if not cache_latents_flag:
+        return False, None
+
+    if getattr(args, "no_cache_latents_to_disk", False):
+        return False, None
+
+    threshold = getattr(args, "cache_latents_skip_threshold", 0) or 0
+    force_cache = getattr(args, "force_cache_latents", False)
+
+    if threshold and dataset_size >= threshold and not force_cache:
+        message = (
+            "Dataset has {size} captioned images which exceeds the auto-disable "
+            "threshold ({threshold}); skipping latent caching so VAE latents are "
+            "encoded on the fly. Pass --force-cache-latents to override."
+        ).format(size=dataset_size, threshold=threshold)
+        return False, message
+
+    return True, None
+
+
 def infer_resume_step(resume_path: str) -> Optional[int]:
     """Best-effort extraction of the completed step count from a checkpoint name."""
 
@@ -703,15 +748,20 @@ class DataLoaderState:
 
 
 def prepare_dataloader_state(
-    args: argparse.Namespace, resolved: Dict[str, str]
+    args: argparse.Namespace,
+    resolved: Dict[str, str],
+    images: Optional[Sequence[Path]] = None,
 ) -> Optional[DataLoaderState]:
     """Generate the state file consumed by ``sitecustomize`` to patch PyTorch."""
 
     if args.disable_dataloader_state:
         return None
 
-    data_dir = Path(args.data_dir)
-    images = collect_dataset_entries(data_dir, args.caption_extension)
+    if images is None:
+        data_dir = Path(args.data_dir)
+        images = collect_dataset_entries(data_dir, args.caption_extension)
+
+    images = list(images)
 
     if not images:
         raise ValueError(
@@ -789,7 +839,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ensure_accelerate_config(resolved)
 
-    loader_state = prepare_dataloader_state(args, resolved)
+    data_dir_path = Path(args.data_dir)
+    dataset_images = collect_dataset_entries(data_dir_path, args.caption_extension)
+
+    if not dataset_images:
+        raise ValueError(
+            "No training images with matching captions were found in the dataset directory."
+        )
+
+    loader_state = prepare_dataloader_state(args, resolved, dataset_images)
     if loader_state is not None:
         args.seed = loader_state.seed
         log_step(
@@ -810,8 +868,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return (flag,)
         return tuple(flag)
 
+    dataset_size = len(dataset_images)
+
+    should_cache_latents, auto_disable_message = evaluate_cache_latents_policy(
+        args, dataset_size, cache_latents_flag
+    )
+
     cache_flag_tokens = _normalise_flags(cache_latents_flag)
-    if cache_flag_tokens and not args.no_cache_latents_to_disk:
+    if cache_flag_tokens and should_cache_latents:
         flags_display = ", ".join(cache_flag_tokens)
         log_step(
             "Latent caching enabled ({}). Kohya will pre-compute .npz files inside {} "
@@ -820,11 +884,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
     elif cache_flag_tokens:
+        if not args.no_cache_latents_to_disk:
+            args.no_cache_latents_to_disk = True
+
         flags_display = ", ".join(cache_flag_tokens)
-        log_step(
-            "Detected kohya_ss cache flag(s) ({}), but --no-cache-latents-to-disk was "
-            "requested so latents will be encoded on the fly.".format(flags_display)
-        )
+        if auto_disable_message:
+            log_step(auto_disable_message)
+        else:
+            log_step(
+                "Detected kohya_ss cache flag(s) ({}), but --no-cache-latents-to-disk was "
+                "requested so latents will be encoded on the fly.".format(flags_display)
+            )
     else:
         log_step(
             "kohya_ss version does not expose a cache-latents flag; trainer will encode "

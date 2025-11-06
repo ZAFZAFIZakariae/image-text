@@ -26,6 +26,9 @@ def make_namespace(**kwargs):
         resume=None,
         resume_step=None,
         disable_dataloader_state=False,
+        force_cache_latents=False,
+        cache_latents_skip_threshold=20000,
+        no_cache_latents_to_disk=False,
     )
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -77,7 +80,9 @@ def test_prepare_dataloader_state_creates_state_file(tmp_path):
 
     resolved = {"train_batch_size": "2", "gradient_accumulation_steps": "4"}
 
-    state = prepare_dataloader_state(args, resolved)
+    images = collect_dataset_entries(data_dir, ".txt")
+
+    state = prepare_dataloader_state(args, resolved, images)
     assert isinstance(state, DataLoaderState)
     assert state.seed == DEFAULT_DATA_LOADER_SEED
     assert state.skip_samples_once == 0
@@ -110,7 +115,8 @@ def test_prepare_dataloader_state_honours_resume_step(tmp_path):
     )
 
     resolved = {"train_batch_size": "3", "gradient_accumulation_steps": "2"}
-    state = prepare_dataloader_state(args, resolved)
+    images = collect_dataset_entries(data_dir, ".txt")
+    state = prepare_dataloader_state(args, resolved, images)
 
     # samples_per_step = 3 * 2 = 6 -> skip = (123 * 6) % 5 = 3
     assert state.skip_samples_once == (123 * 6) % 5
