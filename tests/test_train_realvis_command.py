@@ -7,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from train_realvis_locon_dora import (
     adjust_mixed_precision_for_hardware,
     build_command,
+    detect_argument_flag,
     detect_cache_latents_flag,
     ensure_accelerate_config,
     ensure_optimizer_compatibility,
@@ -33,12 +34,21 @@ def make_args(extra=None):
     return parse_args(argv)
 
 
-def build(extra=None, cache_flag=Ellipsis):
+def build(
+    extra=None,
+    cache_flag=Ellipsis,
+    supports_sdxl=Ellipsis,
+    supports_v2=Ellipsis,
+):
     args = make_args(extra)
     resolved = resolve_training_config(args)
     kwargs = {}
     if cache_flag is not Ellipsis:
         kwargs["cache_latents_flag"] = cache_flag
+    if supports_sdxl is not Ellipsis:
+        kwargs["supports_sdxl"] = supports_sdxl
+    if supports_v2 is not Ellipsis:
+        kwargs["supports_v2"] = supports_v2
     command = build_command(args, resolved, Path("/train_network.py"), **kwargs)
     return command
 
@@ -46,6 +56,12 @@ def build(extra=None, cache_flag=Ellipsis):
 def test_command_includes_cache_latents_by_default():
     command = build()
     assert "--cache_latents_to_disk" in command
+
+
+def test_command_includes_sdxl_and_v2_by_default():
+    command = build()
+    assert "--sdxl" in command
+    assert "--v2" in command
 
 
 def test_command_includes_multiple_cache_latents_flags():
@@ -73,6 +89,16 @@ def test_command_uses_cache_latents_flag_when_specified():
     command = build(cache_flag="--cache_latents")
     assert "--cache_latents" in command
     assert "--cache_latents_to_disk" not in command
+
+
+def test_command_omits_sdxl_when_not_supported():
+    command = build(supports_sdxl=False)
+    assert "--sdxl" not in command
+
+
+def test_command_omits_v2_when_not_supported():
+    command = build(supports_v2=False)
+    assert "--v2" not in command
 
 
 def test_command_includes_mixed_precision_setting():
@@ -190,6 +216,35 @@ parser.add_argument("--cache_latents", action="store_true")
 
     flag = detect_cache_latents_flag(train_script)
     assert flag == ("--cache_latents",)
+
+
+def test_detect_argument_flag_identifies_present_flag(tmp_path):
+    train_script = _write_script(
+        tmp_path,
+        """
+from argparse import ArgumentParser
+
+
+parser = ArgumentParser()
+parser.add_argument("--sdxl", action="store_true")
+""",
+    )
+
+    assert detect_argument_flag(train_script, "--sdxl") is True
+
+
+def test_detect_argument_flag_identifies_missing_flag(tmp_path):
+    train_script = _write_script(
+        tmp_path,
+        """
+from argparse import ArgumentParser
+
+
+parser = ArgumentParser()
+""",
+    )
+
+    assert detect_argument_flag(train_script, "--sdxl") is False
 
 
 def test_ensure_accelerate_config_creates_file(tmp_path, monkeypatch):

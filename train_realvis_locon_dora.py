@@ -227,11 +227,54 @@ def detect_cache_latents_flag(train_script: Path) -> CacheLatentsFlags:
     return flags
 
 
+def _script_supports_argument(train_script: Path, flag: str) -> Optional[bool]:
+    """Return whether ``train_network.py`` defines ``flag`` via ``argparse``."""
+
+    try:
+        script_text = train_script.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    try:
+        tree = ast.parse(script_text)
+    except SyntaxError:
+        pattern = r"add_argument\([^#\n]*{}".format(re.escape(flag))
+        return bool(re.search(pattern, script_text))
+
+    found = False
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 - argparse API
+            nonlocal found
+            if found:
+                return
+
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "add_argument":
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and arg.value == flag:
+                        found = True
+                        return
+
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return found
+
+
+def detect_argument_flag(train_script: Path, flag: str) -> Optional[bool]:
+    """Public wrapper around ``_script_supports_argument``."""
+
+    return _script_supports_argument(train_script, flag)
+
+
 def build_command(
     args: argparse.Namespace,
     resolved: Dict[str, str],
     train_script: Path,
     cache_latents_flag: Optional[Union[str, Sequence[str]]] = ("--cache_latents_to_disk",),
+    supports_sdxl: Optional[bool] = None,
+    supports_v2: Optional[bool] = None,
 ) -> List[str]:
     """Assemble the kohya_ss command from CLI arguments."""
 
@@ -245,8 +288,6 @@ def build_command(
         f"--network_dim={resolved['network_dim']}",
         f"--network_alpha={resolved['network_alpha']}",
         f"--network_dropout={resolved['network_dropout']}",
-        "--sdxl",
-        "--v2",
         f"--pretrained_model_name_or_path={args.base_model}",
         f"--train_data_dir={args.data_dir}",
         f"--caption_extension={args.caption_extension}",
@@ -274,6 +315,12 @@ def build_command(
         f"--train_batch_size={resolved['train_batch_size']}",
         f"--gradient_accumulation_steps={resolved['gradient_accumulation_steps']}",
     ]
+
+    if supports_sdxl is not False:
+        command.append("--sdxl")
+
+    if supports_v2 is not False:
+        command.append("--v2")
 
     cache_flags: List[str] = []
     if isinstance(cache_latents_flag, str):
@@ -1030,6 +1077,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     train_script = resolve_kohya_train_script()
     log_step(f"Resolved kohya_ss training script at {train_script}.")
     cache_latents_flag = detect_cache_latents_flag(train_script)
+    supports_sdxl = detect_argument_flag(train_script, "--sdxl")
+    if supports_sdxl is False:
+        log_step("kohya_ss version does not expose an --sdxl flag; continuing without it.")
+
+    supports_v2 = detect_argument_flag(train_script, "--v2")
+    if supports_v2 is False:
+        log_step("kohya_ss version does not expose a --v2 flag; continuing without it.")
 
     def _normalise_flags(flag: CacheLatentsFlags) -> Sequence[str]:
         if not flag:
@@ -1071,7 +1125,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "latents on the fly."
         )
 
-    command = build_command(args, resolved, train_script, cache_latents_flag)
+    command = build_command(
+        args,
+        resolved,
+        train_script,
+        cache_latents_flag,
+        supports_sdxl=supports_sdxl,
+        supports_v2=supports_v2,
+    )
 
     printable = " ".join(shlex.quote(token) for token in command)
     log_step("Launching kohya_ss training command:")
