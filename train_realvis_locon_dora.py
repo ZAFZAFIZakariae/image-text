@@ -54,6 +54,7 @@ COMMON_DEFAULTS: Dict[str, str] = {
     "max_data_loader_n_workers": "8",
     "log_prefix": "L4_full60k",
     "mixed_precision": MIXED_PRECISION_MODE,
+    "optimizer_type": "adamw8bit",
 }
 
 
@@ -101,6 +102,7 @@ def resolve_training_config(args: argparse.Namespace) -> Dict[str, str]:
         "max_data_loader_n_workers",
         "log_prefix",
         "mixed_precision",
+        "optimizer_type",
     ):
         value = getattr(args, key, None)
         if value is not None:
@@ -251,7 +253,7 @@ def build_command(
         f"--output_name={args.output_name}",
         f"--learning_rate={resolved['learning_rate']}",
         f"--text_encoder_lr={resolved['text_encoder_lr']}",
-        "--optimizer_type=adamw8bit",
+        f"--optimizer_type={resolved['optimizer_type']}",
         f"--max_grad_norm={resolved['max_grad_norm']}",
         f"--lr_scheduler={resolved['lr_scheduler']}",
         f"--mixed_precision={resolved['mixed_precision']}",
@@ -393,6 +395,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "max_data_loader_n_workers",
         "log_prefix",
         "mixed_precision",
+        "optimizer_type",
     ):
         parser.add_argument(f"--{name.replace('_', '-')}", dest=name)
 
@@ -631,6 +634,86 @@ def ensure_accelerate_config(resolved: Dict[str, str]) -> None:
         )
 
 
+def adjust_mixed_precision_for_hardware(resolved: Dict[str, str]) -> None:
+    """Downgrade bf16 precision when the active GPU lacks native support."""
+
+    target = (resolved.get("mixed_precision") or "").lower()
+    if target != "bf16":
+        return
+
+    try:
+        import torch
+    except Exception:
+        return
+
+    supports_bf16 = False
+
+    try:
+        if torch.cuda.is_available():
+            bf16_checker = getattr(torch.cuda, "is_bf16_supported", None)
+            if callable(bf16_checker):
+                supports_bf16 = bool(bf16_checker())
+            else:
+                major, _minor = torch.cuda.get_device_capability()  # type: ignore[attr-defined]
+                supports_bf16 = major >= 8
+    except Exception:
+        supports_bf16 = False
+
+    if supports_bf16:
+        return
+
+    resolved["mixed_precision"] = "fp16"
+    log_step(
+        "GPU does not report native bfloat16 support; falling back to mixed_precision=fp16."
+    )
+
+
+def ensure_optimizer_compatibility(resolved: Dict[str, str]) -> None:
+    """Fallback to standard AdamW when 8-bit optimisers are unavailable."""
+
+    optimizer = resolved.get("optimizer_type", "adamw8bit").lower()
+    if optimizer != "adamw8bit":
+        return
+
+    try:
+        import bitsandbytes  # type: ignore  # noqa: F401
+        from bitsandbytes import __version__ as _bnb_version  # type: ignore  # noqa: F401
+        from bitsandbytes.optim import AdamW8bit  # type: ignore  # noqa: F401
+    except Exception as exc:
+        log_step(
+            "bitsandbytes 8-bit optimiser unavailable ({}); falling back to adamw.".format(
+                exc
+            )
+        )
+        resolved["optimizer_type"] = "adamw"
+        return
+
+    try:
+        import torch
+    except Exception:
+        return
+
+    try:
+        if not torch.cuda.is_available():  # type: ignore[attr-defined]
+            log_step(
+                "CUDA is not available but adamw8bit was requested; using adamw optimiser instead."
+            )
+            resolved["optimizer_type"] = "adamw"
+            return
+
+        major, minor = torch.cuda.get_device_capability()  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+    if major < 7:
+        capability = f"{major}.{minor}"
+        log_step(
+            "GPU compute capability {} is below 7.0; bitsandbytes 8-bit optimiser is not supported. "
+            "Falling back to adamw.".format(capability)
+        )
+        resolved["optimizer_type"] = "adamw"
+
+
 def resolve_kohya_train_script() -> Path:
     """Return the filesystem path to ``train_network.py`` inside ``kohya_ss``."""
 
@@ -836,6 +919,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     log_step(f"Resolving training configuration for preset '{args.preset}'...")
     resolved = resolve_training_config(args)
+
+    adjust_mixed_precision_for_hardware(resolved)
+    ensure_optimizer_compatibility(resolved)
 
     ensure_accelerate_config(resolved)
 

@@ -5,9 +5,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from train_realvis_locon_dora import (
+    adjust_mixed_precision_for_hardware,
     build_command,
     detect_cache_latents_flag,
     ensure_accelerate_config,
+    ensure_optimizer_compatibility,
     evaluate_cache_latents_policy,
     parse_args,
     resolve_training_config,
@@ -81,6 +83,11 @@ def test_command_includes_mixed_precision_setting():
 def test_command_allows_mixed_precision_override():
     command = build(["--mixed-precision", "fp16"])
     assert "--mixed_precision=fp16" in command
+
+
+def test_command_allows_optimizer_override():
+    command = build(["--optimizer-type", "adamw"])
+    assert "--optimizer_type=adamw" in command
 
 
 def test_evaluate_cache_latents_policy_disables_large_dataset():
@@ -217,3 +224,85 @@ def test_ensure_accelerate_config_creates_file(tmp_path, monkeypatch):
 
     assert recorded["mixed_precision"] == "bf16"
     assert Path(recorded["save_location"]).exists()
+
+
+def test_adjust_mixed_precision_downgrades_without_support(monkeypatch):
+    resolved = {"mixed_precision": "bf16"}
+
+    fake_torch = types.ModuleType("torch")
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        is_bf16_supported=lambda: False,
+        get_device_capability=lambda device=0: (7, 5),
+    )
+    fake_torch.cuda = fake_cuda
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    adjust_mixed_precision_for_hardware(resolved)
+
+    assert resolved["mixed_precision"] == "fp16"
+
+
+def test_adjust_mixed_precision_preserves_when_supported(monkeypatch):
+    resolved = {"mixed_precision": "bf16"}
+
+    fake_torch = types.ModuleType("torch")
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        is_bf16_supported=lambda: True,
+    )
+    fake_torch.cuda = fake_cuda
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    adjust_mixed_precision_for_hardware(resolved)
+
+    assert resolved["mixed_precision"] == "bf16"
+
+
+def test_optimizer_fallback_when_bitsandbytes_missing(monkeypatch):
+    resolved = {"optimizer_type": "adamw8bit"}
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def raising_import(name, *args, **kwargs):
+        if name.startswith("bitsandbytes"):
+            raise ModuleNotFoundError("bitsandbytes not available")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", raising_import)
+
+    ensure_optimizer_compatibility(resolved)
+
+    assert resolved["optimizer_type"] == "adamw"
+
+
+def test_optimizer_keeps_8bit_when_supported(monkeypatch):
+    resolved = {"optimizer_type": "adamw8bit"}
+
+    fake_bnb = types.ModuleType("bitsandbytes")
+    fake_bnb.__version__ = "0.test"
+    fake_optim = types.ModuleType("bitsandbytes.optim")
+
+    class FakeAdamW8bit:  # pragma: no cover - minimal stub for import
+        pass
+
+    fake_optim.AdamW8bit = FakeAdamW8bit
+
+    fake_torch = types.ModuleType("torch")
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        get_device_capability=lambda device=0: (8, 0),
+    )
+    fake_torch.cuda = fake_cuda
+
+    monkeypatch.setitem(sys.modules, "bitsandbytes", fake_bnb)
+    monkeypatch.setitem(sys.modules, "bitsandbytes.optim", fake_optim)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    ensure_optimizer_compatibility(resolved)
+
+    assert resolved["optimizer_type"] == "adamw8bit"
