@@ -48,6 +48,11 @@ def test_command_includes_cache_latents_by_default():
     assert "--cache_latents_to_disk" in command
 
 
+def test_command_targets_sdxl_model():
+    command = build()
+    assert "--sdxl" in command
+
+
 def test_command_includes_multiple_cache_latents_flags():
     command = build(cache_flag=("--cache_latents_to_disk", "--cache_latents"))
     assert "--cache_latents_to_disk" in command
